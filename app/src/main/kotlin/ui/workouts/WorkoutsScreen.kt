@@ -11,7 +11,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -22,12 +26,14 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -37,6 +43,9 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import br.com.ryuukossei.gymprogress.data.local.GymDao
 import br.com.ryuukossei.gymprogress.data.local.SessionSummaryRow
 import br.com.ryuukossei.gymprogress.data.local.WorkoutEntity
+import br.com.ryuukossei.gymprogress.data.draft.SessionDraftStore
+import br.com.ryuukossei.gymprogress.data.repository.GymRepository
+import br.com.ryuukossei.gymprogress.timer.RestTimer
 import br.com.ryuukossei.gymprogress.ui.common.EmptyMessage
 import br.com.ryuukossei.gymprogress.ui.common.LoadingBox
 import br.com.ryuukossei.gymprogress.ui.common.SectionTitle
@@ -49,6 +58,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import java.text.Collator
 import java.util.Locale
 
@@ -60,7 +70,13 @@ data class WorkoutsUiState(
     val archived: List<WorkoutItem>,
 )
 
-class WorkoutsViewModel(dao: GymDao) : ViewModel() {
+class WorkoutsViewModel(
+    private val repository: GymRepository,
+    private val drafts: SessionDraftStore,
+    private val timer: RestTimer,
+) : ViewModel() {
+    private val dao: GymDao = repository.dao
+
     private val collator = Collator.getInstance(Locale.forLanguageTag("pt-BR")).apply { strength = Collator.PRIMARY }
 
     val state: StateFlow<WorkoutsUiState?> =
@@ -78,18 +94,31 @@ class WorkoutsViewModel(dao: GymDao) : ViewModel() {
                 archived = items.filter { it.workout.isArchived },
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** Descarta um treino em andamento (com as séries) e limpa o rascunho e o cronômetro dele. */
+    fun cancelSession(sessionId: String) {
+        viewModelScope.launch {
+            repository.cancelSession(sessionId)
+            drafts.clear(sessionId)
+            if (timer.state.value?.sessionId == sessionId) timer.stop()
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkoutsScreen(
     onOpenWorkout: (String) -> Unit,
-    onOpenSession: (String) -> Unit,
+    onRunSession: (String) -> Unit,
 ) {
     val container = appContainer()
-    val vm: WorkoutsViewModel = viewModel(factory = viewModelFactory { initializer { WorkoutsViewModel(container.repository.dao) } })
+    val vm: WorkoutsViewModel = viewModel(
+        factory = viewModelFactory { initializer { WorkoutsViewModel(container.repository, container.drafts, container.restTimer) } }
+    )
     val state by vm.state.collectAsStateWithLifecycle()
     var showArchived by rememberSaveable { mutableStateOf(false) }
+    var confirmContinue by remember { mutableStateOf<SessionSummaryRow?>(null) }
+    var confirmCancel by remember { mutableStateOf<SessionSummaryRow?>(null) }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Treinos") }) },
@@ -108,13 +137,10 @@ fun WorkoutsScreen(
                 if (s.inProgress.isNotEmpty()) {
                     item { SectionTitle("Em andamento", color = WarningColor) }
                     items(s.inProgress, key = { "s-" + it.publicId }) { session ->
-                        InProgressCard(session) { onOpenSession(session.publicId) }
-                    }
-                    item {
-                        Text(
-                            "Continuar ou cancelar um treino pelo app chega na próxima etapa.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        InProgressCard(
+                            session = session,
+                            onContinue = { confirmContinue = session },
+                            onCancel = { confirmCancel = session },
                         )
                     }
                 }
@@ -141,21 +167,60 @@ fun WorkoutsScreen(
             }
         }
     }
+    confirmContinue?.let { session ->
+        AlertDialog(
+            onDismissRequest = { confirmContinue = null },
+            title = { Text("Continuar treino?") },
+            text = {
+                Text("Reabrir \"${session.workoutName}\", iniciado ${formatDateTime(session.startedAt)}, com ${session.setCount} série${if (session.setCount == 1) "" else "s"} registrada${if (session.setCount == 1) "" else "s"}.")
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmContinue = null; onRunSession(session.publicId) }) { Text("Continuar") }
+            },
+            dismissButton = { TextButton(onClick = { confirmContinue = null }) { Text("Voltar") } },
+        )
+    }
+
+    confirmCancel?.let { session ->
+        AlertDialog(
+            onDismissRequest = { confirmCancel = null },
+            title = { Text("Cancelar treino?") },
+            text = { Text("O treino em andamento e todas as séries registradas nele serão descartados. Ele não ficará no histórico e isso não pode ser desfeito.") },
+            confirmButton = {
+                TextButton(onClick = { confirmCancel = null; vm.cancelSession(session.publicId) }) {
+                    Text("Cancelar treino", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmCancel = null }) { Text("Voltar") } },
+        )
+    }
 }
 
 @Composable
-private fun InProgressCard(session: SessionSummaryRow, onClick: () -> Unit) {
+private fun InProgressCard(session: SessionSummaryRow, onContinue: () -> Unit, onCancel: () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = WarningColor.copy(alpha = 0.10f)),
     ) {
-        Column(Modifier.padding(16.dp)) {
-            Text(session.workoutName, style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Iniciado ${formatDateTime(session.startedAt)} • ${session.setCount} série${if (session.setCount == 1) "" else "s"}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column {
+                Text(session.workoutName, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Iniciado ${formatDateTime(session.startedAt)} • ${session.setCount} série${if (session.setCount == 1) "" else "s"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
+                    Text("Cancelar", color = MaterialTheme.colorScheme.error)
+                }
+                Button(
+                    onClick = onContinue,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = WarningColor, contentColor = Color.Black),
+                ) { Text("Continuar") }
+            }
         }
     }
 }

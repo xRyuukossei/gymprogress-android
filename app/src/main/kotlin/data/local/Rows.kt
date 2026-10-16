@@ -44,3 +44,12 @@ data class LocalCounts(
     val sessions: Int,
     val sets: Int,
 )
+
+data class PreviousSetRow(
+    val exercisePublicId: String,
+    val sessionPublicId: String,
+    val startedAt: Long,
+    val setNumber: Int,
+    val performedRepetitions: Int,
+    val performedWeight: Double,
+)

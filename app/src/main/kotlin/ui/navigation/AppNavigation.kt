@@ -9,6 +9,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
@@ -23,6 +24,7 @@ import androidx.navigation.navArgument
 import br.com.ryuukossei.gymprogress.R
 import br.com.ryuukossei.gymprogress.ui.history.HistoryScreen
 import br.com.ryuukossei.gymprogress.ui.history.SessionDetailScreen
+import br.com.ryuukossei.gymprogress.ui.session.RunSessionScreen
 import br.com.ryuukossei.gymprogress.ui.settings.SettingsScreen
 import br.com.ryuukossei.gymprogress.ui.workouts.WorkoutDetailScreen
 import br.com.ryuukossei.gymprogress.ui.workouts.WorkoutsScreen
@@ -33,12 +35,14 @@ private object Routes {
     const val HISTORY = "history"
     const val SESSION = "session/{id}"
     const val SETTINGS = "settings"
+    const val RUN = "run/{id}"
 
     fun workout(id: String) = "workout/$id"
     fun session(id: String) = "session/$id"
+    fun run(id: String) = "run/$id"
 }
 
-private data class Tab(val route: String, val label: String, @DrawableRes val icon: Int, val owns: List<String>)
+private data class Tab(val route: String, val label: String, @param:DrawableRes val icon: Int, val owns: List<String>)
 
 private val tabs = listOf(
     Tab(Routes.WORKOUTS, "Treinos", R.drawable.ic_nav_workouts, listOf(Routes.WORKOUTS, Routes.WORKOUT)),
@@ -46,16 +50,29 @@ private val tabs = listOf(
     Tab(Routes.SETTINGS, "Ajustes", R.drawable.ic_nav_settings, listOf(Routes.SETTINGS)),
 )
 
-/** Telas principais com a barra de navegação inferior. */
+/**
+ * Telas principais com a barra de navegação inferior.
+ * [sessionToOpen]: sessão a abrir direto (ex.: ao tocar na notificação do cronômetro).
+ */
 @Composable
-fun MainNavigation() {
+fun MainNavigation(sessionToOpen: String? = null, onSessionOpened: () -> Unit = {}) {
     val navController = rememberNavController()
     val backStack by navController.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
 
+    LaunchedEffect(sessionToOpen) {
+        if (sessionToOpen != null) {
+            val alreadyOpen = currentRoute == Routes.RUN &&
+                backStack?.arguments?.getString("id") == sessionToOpen
+            if (!alreadyOpen) navController.navigate(Routes.run(sessionToOpen)) { launchSingleTop = true }
+            onSessionOpened()
+        }
+    }
+
     Scaffold(
         bottomBar = {
-            NavigationBar {
+            // A tela de execução do treino ocupa a tela inteira.
+            if (currentRoute != Routes.RUN) NavigationBar {
                 tabs.forEach { tab ->
                     NavigationBarItem(
                         selected = currentRoute in tab.owns,
@@ -77,13 +94,31 @@ fun MainNavigation() {
             composable(Routes.WORKOUTS) {
                 WorkoutsScreen(
                     onOpenWorkout = { navController.navigate(Routes.workout(it)) },
-                    onOpenSession = { navController.navigate(Routes.session(it)) },
+                    onRunSession = { navController.navigate(Routes.run(it)) },
                 )
             }
             composable(Routes.WORKOUT, arguments = listOf(navArgument("id") { type = NavType.StringType })) { entry ->
                 WorkoutDetailScreen(
                     workoutId = entry.arguments?.getString("id").orEmpty(),
                     onBack = { navController.popBackStack() },
+                    onRunSession = { navController.navigate(Routes.run(it)) },
+                )
+            }
+            composable(Routes.RUN, arguments = listOf(navArgument("id") { type = NavType.StringType })) { entry ->
+                RunSessionScreen(
+                    sessionId = entry.arguments?.getString("id").orEmpty(),
+                    onExit = {
+                        // Volta para a aba Treinos, onde o treino em andamento aparece.
+                        navController.navigate(Routes.WORKOUTS) {
+                            popUpTo(Routes.WORKOUTS) { inclusive = false }
+                            launchSingleTop = true
+                        }
+                    },
+                    onFinished = { id ->
+                        navController.navigate(Routes.session(id)) {
+                            popUpTo(Routes.WORKOUTS) { inclusive = false }
+                        }
+                    },
                 )
             }
             composable(Routes.HISTORY) {

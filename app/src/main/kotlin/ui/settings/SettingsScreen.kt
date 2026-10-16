@@ -59,14 +59,18 @@ class SettingsViewModel(private val repository: GymRepository, settings: StateFl
     val counts: StateFlow<LocalCounts?> =
         repository.dao.observeCounts().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /** Alterações feitas no celular que ainda não foram enviadas ao servidor. */
+    val pending: StateFlow<Int> =
+        repository.dao.observePendingChanges().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
     private val _action = MutableStateFlow(SettingsActionState())
     val action: StateFlow<SettingsActionState> = _action.asStateFlow()
 
-    fun reimport() {
+    fun reimport(discardLocalChanges: Boolean = false) {
         _action.value = SettingsActionState(working = true)
         viewModelScope.launch {
             _action.value = try {
-                val r = repository.reimport()
+                val r = repository.reimport(discardLocalChanges)
                 SettingsActionState(message = "Importados: ${r.workouts} treinos, ${r.exercises} exercícios, ${r.sessions} sessões e ${r.sets} séries.")
             } catch (e: Exception) {
                 SettingsActionState(message = e.message ?: "Erro desconhecido.", isError = true)
@@ -89,7 +93,9 @@ fun SettingsScreen() {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val counts by vm.counts.collectAsStateWithLifecycle()
     val action by vm.action.collectAsStateWithLifecycle()
+    val pending by vm.pending.collectAsStateWithLifecycle()
     var confirmReimport by remember { mutableStateOf(false) }
+    var confirmDiscard by remember { mutableStateOf(false) }
     var confirmDisconnect by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
@@ -135,6 +141,13 @@ fun SettingsScreen() {
                         Text("${c.workouts} treinos • ${c.exercises} exercícios")
                         Text("${c.sessions} sessões • ${c.sets} séries")
                     }
+                    Text(
+                        if (pending == 0) "Nenhuma alteração pendente de envio."
+                        else "$pending alteração(ões) feitas neste celular ainda não enviadas ao servidor (o envio automático chega na próxima etapa).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (pending == 0) MaterialTheme.colorScheme.onSurfaceVariant else br.com.ryuukossei.gymprogress.ui.theme.WarningColor,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
                 }
             }
 
@@ -150,6 +163,14 @@ fun SettingsScreen() {
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (action.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                 )
+            }
+
+            if (pending > 0) {
+                OutlinedButton(
+                    onClick = { confirmDiscard = true },
+                    enabled = !action.working,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Descartar alterações do celular e reimportar", color = MaterialTheme.colorScheme.error) }
             }
 
             OutlinedButton(
@@ -176,6 +197,25 @@ fun SettingsScreen() {
                 TextButton(onClick = { confirmReimport = false; vm.reimport() }) { Text("Reimportar") }
             },
             dismissButton = { TextButton(onClick = { confirmReimport = false }) { Text("Voltar") } },
+        )
+    }
+
+    if (confirmDiscard) {
+        AlertDialog(
+            onDismissRequest = { confirmDiscard = false },
+            title = { Text("Descartar alterações?") },
+            text = {
+                Text(
+                    "As $pending alteração(ões) feitas neste celular e ainda não enviadas ao servidor serão APAGADAS " +
+                        "(inclusive treinos registrados aqui), e os dados serão substituídos pelos do servidor. Isso não pode ser desfeito."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmDiscard = false; vm.reimport(discardLocalChanges = true) }) {
+                    Text("Descartar e reimportar", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmDiscard = false }) { Text("Voltar") } },
         )
     }
 

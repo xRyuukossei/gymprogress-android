@@ -3,6 +3,15 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Cronômetro de descanso: notificação com contagem regressiva e aviso no fim. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Alarme exato no fim do descanso (Android 13+ concede automaticamente USE_EXACT_ALARM;
+         no Android 12 usa SCHEDULE_EXACT_ALARM). App distribuído fora da Play Store. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32" />
 
     <application
         android:name=".GymProgressApp"
@@ -17,6 +26,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:label="@string/app_name"
             android:theme="@style/Theme.GymProgress"
             android:windowSoftInputMode="adjustResize">
@@ -26,6 +36,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".timer.RestTimerReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

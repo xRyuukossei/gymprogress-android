@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -16,9 +18,15 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -32,6 +40,9 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import br.com.ryuukossei.gymprogress.R
 import br.com.ryuukossei.gymprogress.data.local.GymDao
 import br.com.ryuukossei.gymprogress.data.local.PlannedExerciseRow
+import br.com.ryuukossei.gymprogress.data.local.SessionEntity
+import br.com.ryuukossei.gymprogress.data.repository.GymRepository
+import br.com.ryuukossei.gymprogress.ui.common.formatDateTime
 import br.com.ryuukossei.gymprogress.data.local.WorkoutEntity
 import br.com.ryuukossei.gymprogress.ui.common.EmptyMessage
 import br.com.ryuukossei.gymprogress.ui.common.LoadingBox
@@ -43,38 +54,51 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 data class PlannedExerciseItem(val row: PlannedExerciseRow, val muscles: List<String>)
 
 data class WorkoutDetailUiState(
     val workout: WorkoutEntity?,
     val exercises: List<PlannedExerciseItem>,
+    /** Sessão deste treino ainda em andamento, se houver. */
+    val inProgress: SessionEntity?,
 )
 
-class WorkoutDetailViewModel(dao: GymDao, workoutId: String) : ViewModel() {
+class WorkoutDetailViewModel(private val repository: GymRepository, private val workoutId: String) : ViewModel() {
+    private val dao: GymDao = repository.dao
+
     val state: StateFlow<WorkoutDetailUiState?> =
         combine(
             dao.observeWorkout(workoutId),
             dao.observePlannedExercises(workoutId),
             dao.observeExerciseMuscles(),
-        ) { workout, planned, muscles ->
+            dao.observeInProgressSessionOfWorkout(workoutId),
+        ) { workout, planned, muscles, inProgress ->
             val musclesByExercise = muscles.groupBy({ it.exercisePublicId }, { it.muscleName })
             WorkoutDetailUiState(
                 workout = workout,
                 exercises = planned.map { PlannedExerciseItem(it, musclesByExercise[it.exercisePublicId].orEmpty()) },
+                inProgress = inProgress,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun start(onStarted: (String) -> Unit) {
+        viewModelScope.launch { onStarted(repository.startSession(workoutId)) }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WorkoutDetailScreen(workoutId: String, onBack: () -> Unit) {
+fun WorkoutDetailScreen(workoutId: String, onBack: () -> Unit, onRunSession: (String) -> Unit) {
     val container = appContainer()
     val vm: WorkoutDetailViewModel = viewModel(
         key = "workout-$workoutId",
-        factory = viewModelFactory { initializer { WorkoutDetailViewModel(container.repository.dao, workoutId) } },
+        factory = viewModelFactory { initializer { WorkoutDetailViewModel(container.repository, workoutId) } },
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    var confirmContinue by remember { mutableStateOf<SessionEntity?>(null) }
+    var starting by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -86,6 +110,28 @@ fun WorkoutDetailScreen(workoutId: String, onBack: () -> Unit) {
                     }
                 },
             )
+        },
+        bottomBar = {
+            val s = state
+            if (s?.workout != null && s.exercises.isNotEmpty()) {
+                Column(Modifier.navigationBarsPadding().padding(16.dp)) {
+                    val inProgress = s.inProgress
+                    Button(
+                        onClick = {
+                            if (inProgress != null) {
+                                confirmContinue = inProgress
+                            } else if (!starting) {
+                                starting = true
+                                vm.start { id -> starting = false; onRunSession(id) }
+                            }
+                        },
+                        enabled = !starting,
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                    ) {
+                        Text(if (inProgress != null) "Continuar treino em andamento" else "Iniciar treino")
+                    }
+                }
+            }
         },
         contentWindowInsets = WindowInsets(0),
     ) { padding ->
@@ -114,7 +160,7 @@ fun WorkoutDetailScreen(workoutId: String, onBack: () -> Unit) {
                 items(s.exercises, key = { it.row.publicId }) { PlannedExerciseCard(it) }
                 item {
                     Text(
-                        "Iniciar o treino e editar o planejamento pelo app chegam nas próximas etapas.",
+                        "Editar o planejamento pelo app chega numa próxima etapa.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 8.dp),
@@ -122,6 +168,17 @@ fun WorkoutDetailScreen(workoutId: String, onBack: () -> Unit) {
                 }
             }
         }
+    }
+    confirmContinue?.let { session ->
+        AlertDialog(
+            onDismissRequest = { confirmContinue = null },
+            title = { Text("Continuar treino?") },
+            text = { Text("Reabrir o treino iniciado em ${formatDateTime(session.startedAt)}.") },
+            confirmButton = {
+                TextButton(onClick = { confirmContinue = null; onRunSession(session.publicId) }) { Text("Continuar") }
+            },
+            dismissButton = { TextButton(onClick = { confirmContinue = null }) { Text("Voltar") } },
+        )
     }
 }
 

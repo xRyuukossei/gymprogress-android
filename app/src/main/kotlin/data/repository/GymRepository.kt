@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import br.com.ryuukossei.gymprogress.data.local.AppDatabase
 import br.com.ryuukossei.gymprogress.data.local.ExerciseEntity
 import br.com.ryuukossei.gymprogress.data.local.ExerciseTargetMuscleEntity
+import br.com.ryuukossei.gymprogress.data.local.PendingDeletionEntity
 import br.com.ryuukossei.gymprogress.data.local.SessionEntity
 import br.com.ryuukossei.gymprogress.data.local.SessionSetEntity
 import br.com.ryuukossei.gymprogress.data.local.TargetMuscleEntity
@@ -13,6 +14,7 @@ import br.com.ryuukossei.gymprogress.data.remote.GymApi
 import br.com.ryuukossei.gymprogress.data.remote.SyncExportDto
 import br.com.ryuukossei.gymprogress.data.settings.SettingsStore
 import java.time.Instant
+import java.util.UUID
 
 data class ImportResult(
     val exercises: Int,
@@ -53,10 +55,13 @@ class GymRepository(
         return result
     }
 
-    /** Baixa tudo de novo do servidor. Recusa se houver alterações locais não enviadas. */
-    suspend fun reimport(): ImportResult {
+    /**
+     * Baixa tudo de novo do servidor. Sem [discardLocalChanges], recusa se houver
+     * alterações do celular ainda não enviadas (para nunca perdê-las sem querer).
+     */
+    suspend fun reimport(discardLocalChanges: Boolean = false): ImportResult {
         val pending = dao.countPendingChanges()
-        if (pending > 0) throw PendingChangesException(pending)
+        if (pending > 0 && !discardLocalChanges) throw PendingChangesException(pending)
 
         val token = settings.token() ?: throw MissingTokenException()
         val export = api.export(settings.state.value.baseUrl, token)
@@ -66,6 +71,66 @@ class GymRepository(
     }
 
     fun disconnect() = settings.clearToken()
+
+    // ===== Execução do treino (tudo grava primeiro no celular) =====
+
+    /** Cria uma sessão em andamento para o treino e devolve o id. */
+    suspend fun startSession(workoutId: String): String {
+        val session = SessionEntity(
+            publicId = newId(),
+            workoutPublicId = workoutId,
+            startedAt = System.currentTimeMillis(),
+            finishedAt = null,
+            notes = null,
+            pendingSync = true,
+        )
+        dao.upsertSession(session)
+        return session.publicId
+    }
+
+    /** Grava (ou atualiza) uma série confirmada. */
+    suspend fun saveSet(sessionId: String, workoutExerciseId: String, setNumber: Int, reps: Int, weight: Double) {
+        db.withTransaction {
+            val existing = dao.findSet(sessionId, workoutExerciseId, setNumber)
+            dao.upsertSet(
+                SessionSetEntity(
+                    publicId = existing?.publicId ?: newId(),
+                    sessionPublicId = sessionId,
+                    workoutExercisePublicId = workoutExerciseId,
+                    setNumber = setNumber,
+                    performedRepetitions = reps,
+                    performedWeight = weight,
+                    pendingSync = true,
+                )
+            )
+        }
+    }
+
+    suspend fun finishSession(sessionId: String) {
+        val session = dao.getSession(sessionId) ?: return
+        if (session.finishedAt != null) return
+        dao.upsertSession(session.copy(finishedAt = System.currentTimeMillis(), pendingSync = true))
+    }
+
+    /**
+     * Descarta uma sessão em andamento e as séries dela. A exclusão fica registrada
+     * para ser enviada ao servidor (se a sessão já existia lá, ela também é removida).
+     */
+    suspend fun cancelSession(sessionId: String) {
+        db.withTransaction {
+            val session = dao.getSession(sessionId) ?: return@withTransaction
+            if (session.finishedAt != null) return@withTransaction
+            dao.deleteSetsOfSession(sessionId)
+            dao.deleteSession(sessionId)
+            dao.insertPendingDeletion(PendingDeletionEntity(ENTITY_SESSION, sessionId))
+        }
+    }
+
+    private fun newId() = UUID.randomUUID().toString()
+
+    companion object {
+        const val ENTITY_SESSION = "session"
+    }
 
     private suspend fun replaceLocalData(export: SyncExportDto): ImportResult {
         val exercises = export.exercises.map {

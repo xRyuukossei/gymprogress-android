@@ -85,6 +85,50 @@ interface GymDao {
     )
     fun observeCounts(): Flow<LocalCounts>
 
+    // ===== Execução do treino =====
+
+    @Query("SELECT * FROM sessions WHERE publicId = :sessionId")
+    fun observeSession(sessionId: String): Flow<SessionEntity?>
+
+    @Query("SELECT * FROM sessions WHERE publicId = :sessionId")
+    suspend fun getSession(sessionId: String): SessionEntity?
+
+    @Query("SELECT * FROM session_sets WHERE sessionPublicId = :sessionId ORDER BY setNumber")
+    fun observeSetsOfSession(sessionId: String): Flow<List<SessionSetEntity>>
+
+    @Query(
+        """
+        SELECT * FROM session_sets
+        WHERE sessionPublicId = :sessionId AND workoutExercisePublicId = :workoutExerciseId AND setNumber = :setNumber
+        LIMIT 1
+        """
+    )
+    suspend fun findSet(sessionId: String, workoutExerciseId: String, setNumber: Int): SessionSetEntity?
+
+    /** Séries de sessões finalizadas para os exercícios informados (mais recentes primeiro). */
+    @Query(
+        """
+        SELECT we.exercisePublicId, s.publicId AS sessionPublicId, s.startedAt,
+               x.setNumber, x.performedRepetitions, x.performedWeight
+        FROM session_sets x
+        JOIN sessions s ON s.publicId = x.sessionPublicId
+        JOIN workout_exercises we ON we.publicId = x.workoutExercisePublicId
+        WHERE s.finishedAt IS NOT NULL AND s.publicId != :excludeSessionId
+        ORDER BY s.startedAt DESC, x.setNumber
+        """
+    )
+    fun observePreviousSets(excludeSessionId: String): Flow<List<PreviousSetRow>>
+
+    @Query("SELECT * FROM sessions WHERE finishedAt IS NULL AND workoutPublicId = :workoutId ORDER BY startedAt DESC LIMIT 1")
+    fun observeInProgressSessionOfWorkout(workoutId: String): Flow<SessionEntity?>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertSession(session: SessionEntity)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertSet(set: SessionSetEntity)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertPendingDeletion(item: PendingDeletionEntity)
+
+    @Query("DELETE FROM session_sets WHERE sessionPublicId = :sessionId") suspend fun deleteSetsOfSession(sessionId: String)
+    @Query("DELETE FROM sessions WHERE publicId = :sessionId") suspend fun deleteSession(sessionId: String)
+
     // ===== Pendências de sincronização =====
 
     @Query(
@@ -99,6 +143,19 @@ interface GymDao {
         """
     )
     suspend fun countPendingChanges(): Int
+
+    @Query(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM exercises WHERE pendingSync = 1) +
+            (SELECT COUNT(*) FROM workouts WHERE pendingSync = 1) +
+            (SELECT COUNT(*) FROM workout_exercises WHERE pendingSync = 1) +
+            (SELECT COUNT(*) FROM sessions WHERE pendingSync = 1) +
+            (SELECT COUNT(*) FROM session_sets WHERE pendingSync = 1) +
+            (SELECT COUNT(*) FROM pending_deletions)
+        """
+    )
+    fun observePendingChanges(): Flow<Int>
 
     // ===== Importação completa (substitui tudo) =====
 
