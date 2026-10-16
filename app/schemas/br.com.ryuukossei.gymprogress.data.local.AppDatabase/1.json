@@ -1,0 +1,501 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 1,
+    "identityHash": "84470a38edcec596b0dc41f311cd4bbf",
+    "entities": [
+      {
+        "tableName": "target_muscles",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `name` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "exercises",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`publicId` TEXT NOT NULL, `name` TEXT NOT NULL, `comment` TEXT, `pendingSync` INTEGER NOT NULL, PRIMARY KEY(`publicId`))",
+        "fields": [
+          {
+            "fieldPath": "publicId",
+            "columnName": "publicId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "comment",
+            "columnName": "comment",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingSync",
+            "columnName": "pendingSync",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "publicId"
+          ]
+        }
+      },
+      {
+        "tableName": "exercise_target_muscles",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`exercisePublicId` TEXT NOT NULL, `targetMuscleId` INTEGER NOT NULL, PRIMARY KEY(`exercisePublicId`, `targetMuscleId`), FOREIGN KEY(`exercisePublicId`) REFERENCES `exercises`(`publicId`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`targetMuscleId`) REFERENCES `target_muscles`(`id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "exercisePublicId",
+            "columnName": "exercisePublicId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetMuscleId",
+            "columnName": "targetMuscleId",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "exercisePublicId",
+            "targetMuscleId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_exercise_target_muscles_targetMuscleId",
+            "unique": false,
+            "columnNames": [
+              "targetMuscleId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_exercise_target_muscles_targetMuscleId` ON `${TABLE_NAME}` (`targetMuscleId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "exercises",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "exercisePublicId"
+            ],
+            "referencedColumns": [
+              "publicId"
+            ]
+          },
+          {
+            "table": "target_muscles",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "targetMuscleId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "workouts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`publicId` TEXT NOT NULL, `name` TEXT NOT NULL, `category` TEXT NOT NULL, `comment` TEXT, `isArchived` INTEGER NOT NULL, `pendingSync` INTEGER NOT NULL, PRIMARY KEY(`publicId`))",
+        "fields": [
+          {
+            "fieldPath": "publicId",
+            "columnName": "publicId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "category",
+            "columnName": "category",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "comment",
+            "columnName": "comment",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isArchived",
+            "columnName": "isArchived",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pendingSync",
+            "columnName": "pendingSync",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "publicId"
+          ]
+        }
+      },
+      {
+        "tableName": "workout_exercises",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`publicId` TEXT NOT NULL, `workoutPublicId` TEXT NOT NULL, `exercisePublicId` TEXT NOT NULL, `sets` INTEGER NOT NULL, `repetitions` INTEGER NOT NULL, `weight` REAL NOT NULL, `restTimeSeconds` INTEGER NOT NULL, `notes` TEXT, `sortOrder` INTEGER NOT NULL, `removedAt` INTEGER, `pendingSync` INTEGER NOT NULL, PRIMARY KEY(`publicId`), FOREIGN KEY(`workoutPublicId`) REFERENCES `workouts`(`publicId`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`exercisePublicId`) REFERENCES `exercises`(`publicId`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "publicId",
+            "columnName": "publicId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "workoutPublicId",
+            "columnName": "workoutPublicId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "exercisePublicId",
+            "columnName": "exercisePublicId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sets",
+            "columnName": "sets",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "repetitions",
+            "columnName": "repetitions",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "weight",
+            "columnName": "weight",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "restTimeSeconds",
+            "columnName": "restTimeSeconds",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "order",
+            "columnName": "sortOrder",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "removedAt",
+            "columnName": "removedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pendingSync",
+            "columnName": "pendingSync",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "publicId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_workout_exercises_workoutPublicId",
+            "unique": false,
+            "columnNames": [
+              "workoutPublicId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_workout_exercises_workoutPublicId` ON `${TABLE_NAME}` (`workoutPublicId`)"
+          },
+          {
+            "name": "index_workout_exercises_exercisePublicId",
+            "unique": false,
+            "columnNames": [
+              "exercisePublicId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_workout_exercises_exercisePublicId` ON `${TABLE_NAME}` (`exercisePublicId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "workouts",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "workoutPublicId"
+            ],
+            "referencedColumns": [
+              "publicId"
+            ]
+          },
+          {
+            "table": "exercises",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "exercisePublicId"
+            ],
+            "referencedColumns": [
+              "publicId"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "sessions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`publicId` TEXT NOT NULL, `workoutPublicId` TEXT NOT NULL, `startedAt` INTEGER NOT NULL, `finishedAt` INTEGER, `notes` TEXT, `pendingSync` INTEGER NOT NULL, PRIMARY KEY(`publicId`), FOREIGN KEY(`workoutPublicId`) REFERENCES `workouts`(`publicId`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "publicId",
+            "columnName": "publicId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "workoutPublicId",
+            "columnName": "workoutPublicId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAt",
+            "columnName": "startedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "finishedAt",
+            "columnName": "finishedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingSync",
+            "columnName": "pendingSync",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "publicId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sessions_workoutPublicId",
+            "unique": false,
+            "columnNames": [
+              "workoutPublicId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sessions_workoutPublicId` ON `${TABLE_NAME}` (`workoutPublicId`)"
+          },
+          {
+            "name": "index_sessions_startedAt",
+            "unique": false,
+            "columnNames": [
+              "startedAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sessions_startedAt` ON `${TABLE_NAME}` (`startedAt`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "workouts",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "workoutPublicId"
+            ],
+            "referencedColumns": [
+              "publicId"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "session_sets",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`publicId` TEXT NOT NULL, `sessionPublicId` TEXT NOT NULL, `workoutExercisePublicId` TEXT NOT NULL, `setNumber` INTEGER NOT NULL, `performedRepetitions` INTEGER NOT NULL, `performedWeight` REAL NOT NULL, `pendingSync` INTEGER NOT NULL, PRIMARY KEY(`publicId`), FOREIGN KEY(`sessionPublicId`) REFERENCES `sessions`(`publicId`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`workoutExercisePublicId`) REFERENCES `workout_exercises`(`publicId`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "publicId",
+            "columnName": "publicId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sessionPublicId",
+            "columnName": "sessionPublicId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "workoutExercisePublicId",
+            "columnName": "workoutExercisePublicId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "setNumber",
+            "columnName": "setNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "performedRepetitions",
+            "columnName": "performedRepetitions",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "performedWeight",
+            "columnName": "performedWeight",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pendingSync",
+            "columnName": "pendingSync",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "publicId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_session_sets_sessionPublicId",
+            "unique": false,
+            "columnNames": [
+              "sessionPublicId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_session_sets_sessionPublicId` ON `${TABLE_NAME}` (`sessionPublicId`)"
+          },
+          {
+            "name": "index_session_sets_workoutExercisePublicId",
+            "unique": false,
+            "columnNames": [
+              "workoutExercisePublicId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_session_sets_workoutExercisePublicId` ON `${TABLE_NAME}` (`workoutExercisePublicId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "sessions",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "sessionPublicId"
+            ],
+            "referencedColumns": [
+              "publicId"
+            ]
+          },
+          {
+            "table": "workout_exercises",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "workoutExercisePublicId"
+            ],
+            "referencedColumns": [
+              "publicId"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "pending_deletions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`entityType` TEXT NOT NULL, `publicId` TEXT NOT NULL, PRIMARY KEY(`entityType`, `publicId`))",
+        "fields": [
+          {
+            "fieldPath": "entityType",
+            "columnName": "entityType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "publicId",
+            "columnName": "publicId",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "entityType",
+            "publicId"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '84470a38edcec596b0dc41f311cd4bbf')"
+    ]
+  }
+}

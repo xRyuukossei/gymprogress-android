@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Backup automático (Android 11 e anteriores). O token fica de fora: ele é
+     criptografado com uma chave do Keystore que não é restaurada em outro aparelho. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="gymprogress_secure.xml" />
+</full-backup-content>
