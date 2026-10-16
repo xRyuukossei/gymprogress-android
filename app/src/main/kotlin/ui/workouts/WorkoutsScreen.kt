@@ -35,6 +35,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -79,7 +81,7 @@ class WorkoutsViewModel(
 
     private val collator = Collator.getInstance(Locale.forLanguageTag("pt-BR")).apply { strength = Collator.PRIMARY }
 
-    val state: StateFlow<WorkoutsUiState?> =
+    val state: StateFlow<WorkoutsUiState?> = repository.observe {
         combine(dao.observeWorkouts(), dao.observeSessionSummaries()) { workouts, sessions ->
             val completedByWorkout = sessions
                 .filter { isCompletedSession(it.startedAt, it.finishedAt) }
@@ -93,7 +95,11 @@ class WorkoutsViewModel(
                 active = items.filter { !it.workout.isArchived },
                 archived = items.filter { it.workout.isArchived },
             )
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** Refaz a consulta (ex.: ao voltar para a aba). */
+    fun refresh() = repository.notifyDataChanged()
 
     /** Descarta um treino em andamento (com as séries) e limpa o rascunho e o cronômetro dele. */
     fun cancelSession(sessionId: String) {
@@ -116,6 +122,7 @@ fun WorkoutsScreen(
         factory = viewModelFactory { initializer { WorkoutsViewModel(container.repository, container.drafts, container.restTimer) } }
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
     var showArchived by rememberSaveable { mutableStateOf(false) }
     var confirmContinue by remember { mutableStateOf<SessionSummaryRow?>(null) }
     var confirmCancel by remember { mutableStateOf<SessionSummaryRow?>(null) }

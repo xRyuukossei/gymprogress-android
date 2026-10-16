@@ -25,6 +25,8 @@ data class SessionSummaryRow(
     val workoutName: String,
     val startedAt: Long,
     val finishedAt: Long?,
+    /** true enquanto a sessão (ou alteração nela) ainda não foi enviada ao servidor. */
+    val pendingSync: Boolean,
     val setCount: Int,
 )
 

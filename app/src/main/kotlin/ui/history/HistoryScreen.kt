@@ -21,12 +21,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import br.com.ryuukossei.gymprogress.data.local.GymDao
+import br.com.ryuukossei.gymprogress.data.repository.GymRepository
 import br.com.ryuukossei.gymprogress.data.local.SessionSummaryRow
 import br.com.ryuukossei.gymprogress.ui.common.EmptyMessage
 import br.com.ryuukossei.gymprogress.ui.common.LoadingBox
@@ -39,20 +41,23 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
-class HistoryViewModel(dao: GymDao) : ViewModel() {
+class HistoryViewModel(private val repository: GymRepository) : ViewModel() {
     /** Só sessões finalizadas; as em andamento aparecem na aba Treinos. */
     val state: StateFlow<List<SessionSummaryRow>?> =
-        dao.observeSessionSummaries()
+        repository.observe { repository.dao.observeSessionSummaries() }
             .map { list -> list.filter { it.finishedAt != null } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun refresh() = repository.notifyDataChanged()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(onOpenSession: (String) -> Unit) {
     val container = appContainer()
-    val vm: HistoryViewModel = viewModel(factory = viewModelFactory { initializer { HistoryViewModel(container.repository.dao) } })
+    val vm: HistoryViewModel = viewModel(factory = viewModelFactory { initializer { HistoryViewModel(container.repository) } })
     val state by vm.state.collectAsStateWithLifecycle()
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Histórico") }) },
@@ -77,6 +82,13 @@ fun HistoryScreen(onOpenSession: (String) -> Unit) {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            if (session.pendingSync) {
+                                Text(
+                                    "Aguardando envio ao servidor",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = br.com.ryuukossei.gymprogress.ui.theme.WarningColor,
+                                )
+                            }
                         }
                     }
                 }

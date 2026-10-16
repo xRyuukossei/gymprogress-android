@@ -73,3 +73,23 @@ data class SyncSetDto(
     val performedRepetitions: Int,
     val performedWeight: Double,
 )
+
+/** Lote de alterações enviado ao servidor (idempotente: reenviar não duplica). */
+@Serializable
+data class SyncPushDto(
+    val exercises: List<SyncExerciseDto> = emptyList(),
+    val workouts: List<SyncWorkoutDto> = emptyList(),
+    val workoutExercises: List<SyncWorkoutExerciseDto> = emptyList(),
+    val sessions: List<SyncSessionDto> = emptyList(),
+    val sets: List<SyncSetDto> = emptyList(),
+    val deletedExercises: List<String> = emptyList(),
+    val deletedSessions: List<String> = emptyList(),
+    val deletedSets: List<String> = emptyList(),
+)
+
+@Serializable
+data class SyncPushResultDto(
+    val upserted: Int = 0,
+    val deleted: Int = 0,
+    val warnings: List<String> = emptyList(),
+)

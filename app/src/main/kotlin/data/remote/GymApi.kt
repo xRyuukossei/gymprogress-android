@@ -4,8 +4,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -30,7 +32,10 @@ class GymApi {
         .callTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
 
     /** Baixa todos os dados do servidor (usado na importação/restauração). */
     suspend fun export(baseUrl: String, token: String): SyncExportDto = withContext(Dispatchers.IO) {
@@ -56,6 +61,37 @@ class GymApi {
             throw ApiException.InvalidResponse(e)
         } catch (e: IllegalArgumentException) {
             // URL mal formada ou JSON inválido
+            throw ApiException.InvalidResponse(e)
+        } catch (e: IOException) {
+            throw ApiException.Network(e)
+        }
+    }
+
+    /** Envia um lote de alterações do celular. */
+    suspend fun push(baseUrl: String, token: String, batch: SyncPushDto): SyncPushResultDto = withContext(Dispatchers.IO) {
+        val body = json.encodeToString(SyncPushDto.serializer(), batch)
+            .toRequestBody("application/json; charset=utf-8".toMediaType())
+        val request = Request.Builder()
+            .url(normalizeBaseUrl(baseUrl) + "/api/sync/push")
+            .header("Authorization", "Bearer $token")
+            .header("Accept", "application/json")
+            .post(body)
+            .build()
+
+        try {
+            client.newCall(request).execute().use { response ->
+                when {
+                    response.code == 401 -> throw ApiException.Unauthorized()
+                    !response.isSuccessful -> throw ApiException.Http(response.code)
+                }
+                val text = response.body?.string().orEmpty()
+                if (text.isBlank()) SyncPushResultDto() else json.decodeFromString(SyncPushResultDto.serializer(), text)
+            }
+        } catch (e: ApiException) {
+            throw e
+        } catch (e: SerializationException) {
+            throw ApiException.InvalidResponse(e)
+        } catch (e: IllegalArgumentException) {
             throw ApiException.InvalidResponse(e)
         } catch (e: IOException) {
             throw ApiException.Network(e)

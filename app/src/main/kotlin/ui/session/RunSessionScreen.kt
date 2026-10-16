@@ -96,11 +96,17 @@ fun RunSessionScreen(
     var showFinish by remember { mutableStateOf(false) }
 
     RequestNotificationPermission()
-    BackHandler { showExit = true }
+    // Só pergunta antes de sair quando há um treino aberto; nos demais casos, volta direto.
+    BackHandler { if (state is RunUiState.Ready) showExit = true else onExit() }
 
     when (val s = state) {
         RunUiState.Loading -> LoadingBox()
-        RunUiState.NotFound -> EmptyMessage("Sessão não encontrada.")
+        RunUiState.NotFound -> {
+            // A sessão não existe mais (ex.: cancelada ou substituída por uma reimportação):
+            // volta para a aba Treinos em vez de prender o usuário nesta tela.
+            LaunchedEffect(Unit) { onExit() }
+            EmptyMessage("Este treino não existe mais neste celular.")
+        }
         is RunUiState.Ready -> {
             if (s.session.finishedAt != null) {
                 // Sessão já finalizada: a execução não se aplica.
@@ -363,7 +369,7 @@ private fun SetRow(
             NumberStepper(
                 value = reps.toDouble(),
                 onValueChange = {
-                    reps = it.toInt()
+                    reps = it.toInt().coerceIn(0, MAX_REPS)
                     repsEdited = true
                     onDraft(p.publicId, setNumber, reps, null)
                 },
@@ -375,7 +381,7 @@ private fun SetRow(
             NumberStepper(
                 value = weight,
                 onValueChange = {
-                    weight = it
+                    weight = it.coerceIn(0.0, MAX_WEIGHT)
                     weightEdited = true
                     onDraft(p.publicId, setNumber, null, weight)
                 },
@@ -428,6 +434,10 @@ private fun ExerciseNavigation(index: Int, count: Int, onSelect: (Int) -> Unit) 
         OutlinedButton(onClick = { onSelect(index + 1) }, enabled = index < count - 1, modifier = Modifier.weight(1f)) { Text("Próximo ›") }
     }
 }
+
+// Mesmos limites aceitos pela API (evita um envio recusado depois).
+private const val MAX_REPS = 100
+private const val MAX_WEIGHT = 1000.0
 
 /** Pede a permissão de notificações (Android 13+), usada pelo cronômetro. */
 @Composable

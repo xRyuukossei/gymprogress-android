@@ -51,7 +51,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun readSessionExtra(intent: Intent?) {
-        intent?.getStringExtra(RestTimer.EXTRA_SESSION_ID)?.let { sessionToOpen.value = it }
+        val sessionId = intent?.getStringExtra(RestTimer.EXTRA_SESSION_ID) ?: return
+        sessionToOpen.value = sessionId
+        // Consome o pedido: se o app for reaberto depois (ex.: pelos recentes), não volta
+        // a abrir essa sessão, que pode já ter sido finalizada ou cancelada.
+        intent.removeExtra(RestTimer.EXTRA_SESSION_ID)
+        setIntent(intent)
     }
 }
 

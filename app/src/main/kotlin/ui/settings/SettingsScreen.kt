@@ -16,6 +16,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.Alignment
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -36,6 +39,10 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import br.com.ryuukossei.gymprogress.data.local.LocalCounts
 import br.com.ryuukossei.gymprogress.data.repository.GymRepository
 import br.com.ryuukossei.gymprogress.data.settings.SettingsState
+import br.com.ryuukossei.gymprogress.data.sync.SyncManager
+import br.com.ryuukossei.gymprogress.data.sync.SyncScheduler
+import br.com.ryuukossei.gymprogress.data.sync.SyncStatus
+import br.com.ryuukossei.gymprogress.data.sync.SyncStatusStore
 import br.com.ryuukossei.gymprogress.ui.common.SectionTitle
 import br.com.ryuukossei.gymprogress.ui.common.appContainer
 import br.com.ryuukossei.gymprogress.ui.common.formatDateTime
@@ -53,15 +60,22 @@ data class SettingsActionState(
     val isError: Boolean = false,
 )
 
-class SettingsViewModel(private val repository: GymRepository, settings: StateFlow<SettingsState>) : ViewModel() {
+class SettingsViewModel(
+    private val repository: GymRepository,
+    settings: StateFlow<SettingsState>,
+    private val sync: SyncManager,
+    private val syncStatusStore: SyncStatusStore,
+    private val scheduler: SyncScheduler,
+) : ViewModel() {
     val settings: StateFlow<SettingsState> = settings
+    val syncStatus: StateFlow<SyncStatus> = syncStatusStore.state
 
     val counts: StateFlow<LocalCounts?> =
-        repository.dao.observeCounts().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+        repository.observe { repository.dao.observeCounts() }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /** Alterações feitas no celular que ainda não foram enviadas ao servidor. */
     val pending: StateFlow<Int> =
-        repository.dao.observePendingChanges().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+        repository.observe { repository.dao.observePendingChanges() }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     private val _action = MutableStateFlow(SettingsActionState())
     val action: StateFlow<SettingsActionState> = _action.asStateFlow()
@@ -80,6 +94,33 @@ class SettingsViewModel(private val repository: GymRepository, settings: StateFl
 
     fun disconnect() = repository.disconnect()
 
+    fun setAutoSync(enabled: Boolean) {
+        syncStatusStore.setAutoSync(enabled)
+        if (enabled) {
+            scheduler.ensurePeriodic()
+            scheduler.syncSoon()
+        } else {
+            scheduler.cancelPeriodic()
+        }
+    }
+
+    /** Envia agora (independe do envio automático estar ligado). */
+    fun syncNow() {
+        _action.value = SettingsActionState(working = true)
+        viewModelScope.launch {
+            _action.value = try {
+                val r = sync.pushPending()
+                SettingsActionState(
+                    message = if (r.sent == 0) "Nada pendente para enviar." else "Enviado ao servidor: ${r.sent} registro(s)." +
+                        if (r.warnings.isNotEmpty()) " Avisos: ${r.warnings.size}." else "",
+                    isError = r.warnings.isNotEmpty(),
+                )
+            } catch (e: Exception) {
+                SettingsActionState(message = e.message ?: "Erro ao sincronizar.", isError = true)
+            }
+        }
+    }
+
     fun dismissMessage() = _action.update { it.copy(message = null) }
 }
 
@@ -88,12 +129,17 @@ class SettingsViewModel(private val repository: GymRepository, settings: StateFl
 fun SettingsScreen() {
     val container = appContainer()
     val vm: SettingsViewModel = viewModel(
-        factory = viewModelFactory { initializer { SettingsViewModel(container.repository, container.settings.state) } }
+        factory = viewModelFactory {
+            initializer {
+                SettingsViewModel(container.repository, container.settings.state, container.sync, container.syncStatus, container.syncScheduler)
+            }
+        }
     )
     val settings by vm.settings.collectAsStateWithLifecycle()
     val counts by vm.counts.collectAsStateWithLifecycle()
     val action by vm.action.collectAsStateWithLifecycle()
     val pending by vm.pending.collectAsStateWithLifecycle()
+    val syncStatus by vm.syncStatus.collectAsStateWithLifecycle()
     var confirmReimport by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
     var confirmDisconnect by remember { mutableStateOf(false) }
@@ -143,7 +189,7 @@ fun SettingsScreen() {
                     }
                     Text(
                         if (pending == 0) "Nenhuma alteração pendente de envio."
-                        else "$pending alteração(ões) feitas neste celular ainda não enviadas ao servidor (o envio automático chega na próxima etapa).",
+                        else "$pending alteração(ões) feitas neste celular ainda não enviadas ao servidor. Treinos em andamento são enviados quando finalizados.",
                         style = MaterialTheme.typography.bodySmall,
                         color = if (pending == 0) MaterialTheme.colorScheme.onSurfaceVariant else br.com.ryuukossei.gymprogress.ui.theme.WarningColor,
                         modifier = Modifier.padding(top = 6.dp),
@@ -151,6 +197,41 @@ fun SettingsScreen() {
                 }
             }
 
+            SectionTitle("Envio ao servidor")
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Enviar automaticamente", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "Treinos finalizados vão para o servidor assim que houver internet.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(checked = syncStatus.autoSyncEnabled, onCheckedChange = vm::setAutoSync)
+                    }
+                    Text(
+                        "Último envio: " + (syncStatus.lastSuccessAt?.let(::formatDateTime) ?: "nunca") +
+                            if (syncStatus.running) " (enviando…)" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    syncStatus.lastError?.let {
+                        Text("Último erro: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                    syncStatus.lastWarnings.forEach {
+                        Text("Aviso do servidor: $it", style = MaterialTheme.typography.bodySmall, color = br.com.ryuukossei.gymprogress.ui.theme.WarningColor)
+                    }
+                    OutlinedButton(
+                        onClick = vm::syncNow,
+                        enabled = !action.working && !syncStatus.running,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Sincronizar agora") }
+                }
+            }
+
+            SectionTitle("Restauração")
             Button(
                 onClick = { confirmReimport = true },
                 enabled = !action.working,

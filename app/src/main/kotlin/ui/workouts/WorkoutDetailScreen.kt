@@ -68,7 +68,7 @@ data class WorkoutDetailUiState(
 class WorkoutDetailViewModel(private val repository: GymRepository, private val workoutId: String) : ViewModel() {
     private val dao: GymDao = repository.dao
 
-    val state: StateFlow<WorkoutDetailUiState?> =
+    val state: StateFlow<WorkoutDetailUiState?> = repository.observe {
         combine(
             dao.observeWorkout(workoutId),
             dao.observePlannedExercises(workoutId),
@@ -81,7 +81,8 @@ class WorkoutDetailViewModel(private val repository: GymRepository, private val 
                 exercises = planned.map { PlannedExerciseItem(it, musclesByExercise[it.exercisePublicId].orEmpty()) },
                 inProgress = inProgress,
             )
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun start(onStarted: (String) -> Unit) {
         viewModelScope.launch { onStarted(repository.startSession(workoutId)) }
