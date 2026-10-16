@@ -18,6 +18,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -27,10 +29,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
@@ -42,6 +44,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import br.com.ryuukossei.gymprogress.R
 import br.com.ryuukossei.gymprogress.data.local.GymDao
 import br.com.ryuukossei.gymprogress.data.local.SessionSummaryRow
 import br.com.ryuukossei.gymprogress.data.local.WorkoutEntity
@@ -70,6 +73,8 @@ data class WorkoutsUiState(
     val inProgress: List<SessionSummaryRow>,
     val active: List<WorkoutItem>,
     val archived: List<WorkoutItem>,
+    /** Categorias já usadas (atalho ao criar um treino). */
+    val categories: List<String>,
 )
 
 class WorkoutsViewModel(
@@ -94,12 +99,27 @@ class WorkoutsViewModel(
                 inProgress = sessions.filter { it.finishedAt == null },
                 active = items.filter { !it.workout.isArchived },
                 archived = items.filter { it.workout.isArchived },
+                categories = workouts.map { it.category.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinctBy { it.lowercase() }
+                    .sortedWith { a, b -> collator.compare(a, b) },
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /** Refaz a consulta (ex.: ao voltar para a aba). */
     fun refresh() = repository.notifyDataChanged()
+
+    /** Cria um treino e devolve o id (ou a mensagem de erro de validação). */
+    fun createWorkout(name: String, category: String, comment: String, onResult: (id: String?, error: String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                onResult(repository.saveWorkout(null, name, category, comment), null)
+            } catch (e: IllegalArgumentException) {
+                onResult(null, e.message ?: "Dados inválidos.")
+            }
+        }
+    }
 
     /** Descarta um treino em andamento (com as séries) e limpa o rascunho e o cronômetro dele. */
     fun cancelSession(sessionId: String) {
@@ -123,22 +143,30 @@ fun WorkoutsScreen(
     )
     val state by vm.state.collectAsStateWithLifecycle()
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
-    var showArchived by rememberSaveable { mutableStateOf(false) }
+    // Arquivados começam sempre ocultos ao abrir a aba.
+    var showArchived by remember { mutableStateOf(false) }
     var confirmContinue by remember { mutableStateOf<SessionSummaryRow?>(null) }
     var confirmCancel by remember { mutableStateOf<SessionSummaryRow?>(null) }
+    var creating by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Treinos") }) },
+        floatingActionButton = {
+            FloatingActionButton(onClick = { creating = true }) {
+                Icon(painterResource(R.drawable.ic_add), contentDescription = "Novo treino")
+            }
+        },
         contentWindowInsets = WindowInsets(0),
     ) { padding ->
         val s = state
         when {
             s == null -> LoadingBox(Modifier.padding(padding))
             s.active.isEmpty() && s.archived.isEmpty() && s.inProgress.isEmpty() ->
-                EmptyMessage("Nenhum treino encontrado.", Modifier.padding(padding))
+                EmptyMessage("Nenhum treino cadastrado. Toque em + para criar o primeiro.", Modifier.padding(padding))
             else -> LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                // Espaço no fim para o botão + não cobrir o último item.
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 88.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 if (s.inProgress.isNotEmpty()) {
@@ -166,6 +194,7 @@ fun WorkoutsScreen(
                         }
                     }
                     if (showArchived) {
+                        item { SectionTitle("Arquivados (${s.archived.size})") }
                         items(s.archived, key = { it.workout.publicId }) { item ->
                             WorkoutCard(item) { onOpenWorkout(item.workout.publicId) }
                         }
@@ -174,6 +203,28 @@ fun WorkoutsScreen(
             }
         }
     }
+    if (creating) {
+        WorkoutEditorDialog(
+            title = "Novo treino",
+            initialName = "",
+            initialCategory = "",
+            initialComment = "",
+            categories = state?.categories.orEmpty(),
+            onDismiss = { creating = false },
+            onSave = { name, category, comment, onError ->
+                vm.createWorkout(name, category, comment) { id, error ->
+                    if (id != null) {
+                        creating = false
+                        // Abre o treino novo para já adicionar os exercícios.
+                        onOpenWorkout(id)
+                    } else {
+                        onError(error ?: "Erro ao salvar.")
+                    }
+                }
+            },
+        )
+    }
+
     confirmContinue?.let { session ->
         AlertDialog(
             onDismissRequest = { confirmContinue = null },

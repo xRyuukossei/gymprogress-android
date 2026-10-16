@@ -59,8 +59,9 @@ class SyncManager(
         val sets = dao.pendingSetsOfFinishedSessions()
         val deletions = dao.pendingDeletions()
         val deletedSessions = deletions.filter { it.entityType == GymRepository.ENTITY_SESSION }.map { it.publicId }
+        val deletedExercises = deletions.filter { it.entityType == GymRepository.ENTITY_EXERCISE }.map { it.publicId }
 
-        val total = exercises.size + workouts.size + workoutExercises.size + sessions.size + sets.size + deletedSessions.size
+        val total = exercises.size + workouts.size + workoutExercises.size + sessions.size + sets.size + deletedSessions.size + deletedExercises.size
         if (total == 0) return SyncResult(0, emptyList())
 
         val musclesByExercise = muscles.groupBy({ it.exercisePublicId }, { it.targetMuscleId })
@@ -91,12 +92,17 @@ class SyncManager(
             sets = sets.map {
                 SyncSetDto(it.publicId, it.sessionPublicId, it.workoutExercisePublicId, it.setNumber, it.performedRepetitions, it.performedWeight)
             },
+            deletedExercises = deletedExercises,
             deletedSessions = deletedSessions,
         )
 
         val response = api.push(settings.state.value.baseUrl, token, batch)
 
-        dao.markPushed(exercises, workouts, workoutExercises, sessions, sets, deletedSessions, GymRepository.ENTITY_SESSION)
+        dao.markPushed(
+            exercises, workouts, workoutExercises, sessions, sets,
+            deletedSessions, GymRepository.ENTITY_SESSION,
+            deletedExercises, GymRepository.ENTITY_EXERCISE,
+        )
 
         return SyncResult(total, response.warnings)
     }

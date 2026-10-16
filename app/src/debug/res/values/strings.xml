@@ -1,0 +1,4 @@
+<resources>
+    <!-- Nome da versão de desenvolvimento (instalada separada do app de uso real). -->
+    <string name="app_name">GymProgress Dev</string>
+</resources>

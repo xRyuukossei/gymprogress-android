@@ -55,3 +55,8 @@ data class PreviousSetRow(
     val performedRepetitions: Int,
     val performedWeight: Double,
 )
+
+data class ExerciseUsageRow(
+    val exercisePublicId: String,
+    val workoutCount: Int,
+)

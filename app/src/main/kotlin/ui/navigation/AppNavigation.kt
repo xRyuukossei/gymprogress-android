@@ -22,7 +22,9 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import br.com.ryuukossei.gymprogress.R
+import br.com.ryuukossei.gymprogress.ui.exercises.ExercisesScreen
 import br.com.ryuukossei.gymprogress.ui.history.HistoryScreen
+import br.com.ryuukossei.gymprogress.ui.home.HomeScreen
 import br.com.ryuukossei.gymprogress.ui.history.SessionDetailScreen
 import br.com.ryuukossei.gymprogress.ui.session.RunSessionScreen
 import br.com.ryuukossei.gymprogress.ui.settings.SettingsScreen
@@ -30,10 +32,12 @@ import br.com.ryuukossei.gymprogress.ui.workouts.WorkoutDetailScreen
 import br.com.ryuukossei.gymprogress.ui.workouts.WorkoutsScreen
 
 private object Routes {
+    const val HOME = "home"
     const val WORKOUTS = "workouts"
     const val WORKOUT = "workout/{id}"
     const val HISTORY = "history"
     const val SESSION = "session/{id}"
+    const val EXERCISES = "exercises"
     const val SETTINGS = "settings"
     const val RUN = "run/{id}"
 
@@ -45,7 +49,9 @@ private object Routes {
 private data class Tab(val route: String, val label: String, @param:DrawableRes val icon: Int, val owns: List<String>)
 
 private val tabs = listOf(
+    Tab(Routes.HOME, "Início", R.drawable.ic_nav_home, listOf(Routes.HOME)),
     Tab(Routes.WORKOUTS, "Treinos", R.drawable.ic_nav_workouts, listOf(Routes.WORKOUTS, Routes.WORKOUT)),
+    Tab(Routes.EXERCISES, "Exercícios", R.drawable.ic_nav_exercises, listOf(Routes.EXERCISES)),
     Tab(Routes.HISTORY, "Histórico", R.drawable.ic_nav_history, listOf(Routes.HISTORY, Routes.SESSION)),
     Tab(Routes.SETTINGS, "Ajustes", R.drawable.ic_nav_settings, listOf(Routes.SETTINGS)),
 )
@@ -88,9 +94,12 @@ fun MainNavigation(sessionToOpen: String? = null, onSessionOpened: () -> Unit = 
     ) { padding ->
         NavHost(
             navController = navController,
-            startDestination = Routes.WORKOUTS,
+            startDestination = Routes.HOME,
             modifier = Modifier.padding(padding),
         ) {
+            composable(Routes.HOME) {
+                HomeScreen(onOpenWorkouts = { navController.navigateToTab(Routes.WORKOUTS) })
+            }
             composable(Routes.WORKOUTS) {
                 WorkoutsScreen(
                     onOpenWorkout = { navController.navigate(Routes.workout(it)) },
@@ -110,17 +119,18 @@ fun MainNavigation(sessionToOpen: String? = null, onSessionOpened: () -> Unit = 
                     onExit = {
                         // Volta para a aba Treinos, onde o treino em andamento aparece.
                         navController.navigate(Routes.WORKOUTS) {
-                            popUpTo(Routes.WORKOUTS) { inclusive = false }
+                            popUpTo(navController.graph.findStartDestination().id)
                             launchSingleTop = true
                         }
                     },
                     onFinished = { id ->
                         navController.navigate(Routes.session(id)) {
-                            popUpTo(Routes.WORKOUTS) { inclusive = false }
+                            popUpTo(navController.graph.findStartDestination().id)
                         }
                     },
                 )
             }
+            composable(Routes.EXERCISES) { ExercisesScreen() }
             composable(Routes.HISTORY) {
                 HistoryScreen(onOpenSession = { navController.navigate(Routes.session(it)) })
             }

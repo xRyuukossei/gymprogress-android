@@ -87,6 +87,68 @@ abstract class GymDao {
     )
     abstract fun observeCounts(): Flow<LocalCounts>
 
+    // ===== Biblioteca de exercícios =====
+
+    @Query("SELECT * FROM exercises") abstract fun observeExercises(): Flow<List<ExerciseEntity>>
+    @Query("SELECT * FROM target_muscles ORDER BY id") abstract fun observeTargetMuscles(): Flow<List<TargetMuscleEntity>>
+    @Query("SELECT * FROM exercise_target_muscles") abstract fun observeExerciseMuscleLinks(): Flow<List<ExerciseTargetMuscleEntity>>
+
+    /** Quantos treinos usam cada exercício hoje (exercícios removidos do treino não contam). */
+    @Query(
+        """
+        SELECT exercisePublicId, COUNT(DISTINCT workoutPublicId) AS workoutCount
+        FROM workout_exercises WHERE removedAt IS NULL
+        GROUP BY exercisePublicId
+        """
+    )
+    abstract fun observeExerciseUsage(): Flow<List<ExerciseUsageRow>>
+
+    @Query("SELECT * FROM exercises WHERE publicId = :id") abstract suspend fun getExercise(id: String): ExerciseEntity?
+
+    @Query("SELECT * FROM exercises WHERE name = :name COLLATE NOCASE AND publicId != :exceptId LIMIT 1")
+    abstract suspend fun findExerciseByName(name: String, exceptId: String): ExerciseEntity?
+
+    /** Referências ao exercício em treinos, incluindo os já removidos do treino (que têm histórico). */
+    @Query("SELECT COUNT(*) FROM workout_exercises WHERE exercisePublicId = :id")
+    abstract suspend fun countWorkoutExercisesOfExercise(id: String): Int
+
+    @Upsert abstract suspend fun upsertExercise(exercise: ExerciseEntity)
+    @Query("DELETE FROM exercise_target_muscles WHERE exercisePublicId = :id") abstract suspend fun deleteMusclesOfExercise(id: String)
+    @Query("DELETE FROM exercises WHERE publicId = :id") abstract suspend fun deleteExercise(id: String)
+
+    // ===== Treinos e planejamento =====
+
+    @Query("SELECT * FROM workouts WHERE publicId = :id") abstract suspend fun getWorkout(id: String): WorkoutEntity?
+    @Query("SELECT * FROM workout_exercises WHERE publicId = :id") abstract suspend fun getWorkoutExercise(id: String): WorkoutExerciseEntity?
+
+    @Query("SELECT * FROM workout_exercises WHERE workoutPublicId = :workoutId AND removedAt IS NULL ORDER BY sortOrder")
+    abstract suspend fun activeWorkoutExercises(workoutId: String): List<WorkoutExerciseEntity>
+
+    // @Upsert (e não REPLACE): treinos e exercícios planejados têm registros filhos.
+    @Upsert abstract suspend fun upsertWorkout(workout: WorkoutEntity)
+    @Upsert abstract suspend fun upsertWorkoutExercise(item: WorkoutExerciseEntity)
+
+    /** Adiciona um exercício ao fim do treino. */
+    @Transaction
+    open suspend fun addWorkoutExercise(item: WorkoutExerciseEntity) {
+        val nextOrder = (activeWorkoutExercises(item.workoutPublicId).maxOfOrNull { it.order } ?: 0) + 1
+        upsertWorkoutExercise(item.copy(order = nextOrder, pendingSync = true))
+    }
+
+    /** Move um exercício uma posição para cima (-1) ou para baixo (+1) e renumera a ordem. */
+    @Transaction
+    open suspend fun moveWorkoutExercise(workoutId: String, id: String, direction: Int) {
+        val list = activeWorkoutExercises(workoutId).toMutableList()
+        val from = list.indexOfFirst { it.publicId == id }
+        val to = from + direction
+        if (from < 0 || to !in list.indices) return
+        list.add(to, list.removeAt(from))
+        list.forEachIndexed { index, item ->
+            val order = index + 1
+            if (item.order != order) upsertWorkoutExercise(item.copy(order = order, pendingSync = true))
+        }
+    }
+
     // ===== Execução do treino =====
 
     @Query("SELECT * FROM sessions WHERE publicId = :sessionId")
@@ -240,6 +302,27 @@ abstract class GymDao {
         )
     }
 
+    /** Cria ou atualiza um exercício com os músculos-alvo, marcando para envio. */
+    @Transaction
+    open suspend fun saveExercise(exercise: ExerciseEntity, muscleIds: List<Int>) {
+        upsertExercise(exercise.copy(pendingSync = true))
+        deleteMusclesOfExercise(exercise.publicId)
+        insertExerciseMuscles(muscleIds.distinct().map { ExerciseTargetMuscleEntity(exercise.publicId, it) })
+    }
+
+    /**
+     * Exclui um exercício que não está em nenhum treino (nem no histórico) e registra a
+     * exclusão para enviar ao servidor. Devolve false se ele estiver em uso.
+     */
+    @Transaction
+    open suspend fun deleteExerciseIfUnused(id: String, entityType: String): Boolean {
+        if (countWorkoutExercisesOfExercise(id) > 0) return false
+        deleteMusclesOfExercise(id)
+        deleteExercise(id)
+        insertPendingDeletion(PendingDeletionEntity(entityType, id))
+        return true
+    }
+
     /** Descarta uma sessão em andamento e registra a exclusão para enviar ao servidor. */
     @Transaction
     open suspend fun cancelInProgressSession(sessionId: String, entityType: String): Boolean {
@@ -294,6 +377,8 @@ abstract class GymDao {
         sets: List<SessionSetEntity>,
         deletedSessionIds: List<String>,
         sessionEntityType: String,
+        deletedExerciseIds: List<String>,
+        exerciseEntityType: String,
     ) {
         markExercisesSynced(unchanged(exercises, exercisesByIds(exercises.map { it.publicId })) { it.publicId })
         markWorkoutsSynced(unchanged(workouts, workoutsByIds(workouts.map { it.publicId })) { it.publicId })
@@ -301,6 +386,7 @@ abstract class GymDao {
         markSessionsSynced(unchanged(sessions, sessionsByIds(sessions.map { it.publicId })) { it.publicId })
         markSetsSynced(unchanged(sets, setsByIds(sets.map { it.publicId })) { it.publicId })
         if (deletedSessionIds.isNotEmpty()) removePendingDeletions(sessionEntityType, deletedSessionIds)
+        if (deletedExerciseIds.isNotEmpty()) removePendingDeletions(exerciseEntityType, deletedExerciseIds)
     }
 
     private fun <T> unchanged(sent: List<T>, current: List<T>, id: (T) -> String): List<String> {

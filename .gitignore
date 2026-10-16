@@ -13,3 +13,8 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Chave de assinatura e senhas: nunca no Git (backup fora do PC).
+keystore.properties
+*.jks
+*.keystore

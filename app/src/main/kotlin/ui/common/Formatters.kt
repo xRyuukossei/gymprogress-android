@@ -47,3 +47,10 @@ fun formatRest(seconds: Int): String = when {
     seconds % 60 == 0 -> "${seconds / 60}min"
     else -> "${seconds / 60}m ${seconds % 60}s"
 }
+
+/** Texto para busca: minúsculas e sem acentos ("Glúteos" encontra "gluteo"). */
+fun normalizeForSearch(text: String): String =
+    java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFD)
+        .replace(Regex("\\p{M}+"), "")
+        .lowercase(Locale.ROOT)
+        .trim()
