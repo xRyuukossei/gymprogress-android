@@ -13,6 +13,21 @@ abstract class GymDao {
 
     // ===== Leitura (telas) =====
 
+    @Query("""
+        SELECT w.publicId AS workoutPublicId,
+            (SELECT COUNT(*) FROM workout_exercises we WHERE we.workoutPublicId = w.publicId AND we.removedAt IS NULL) AS exerciseCount,
+            COALESCE((SELECT SUM(we.sets) FROM workout_exercises we WHERE we.workoutPublicId = w.publicId AND we.removedAt IS NULL), 0) AS plannedSets
+        FROM workouts w
+    """)
+    abstract fun observeWorkoutOverviews(): Flow<List<WorkoutOverviewRow>>
+
+    @Query("SELECT COUNT(*) FROM sessions WHERE finishedAt IS NULL")
+    abstract suspend fun countInProgressSessions(): Int
+
+    @Query("SELECT * FROM sessions WHERE workoutPublicId = :workoutId AND finishedAt IS NULL ORDER BY startedAt DESC LIMIT 1")
+    abstract suspend fun findInProgressSession(workoutId: String): SessionEntity?
+
+
     @Query("SELECT * FROM workouts")
     abstract fun observeWorkouts(): Flow<List<WorkoutEntity>>
 
@@ -86,6 +101,13 @@ abstract class GymDao {
         """
     )
     abstract fun observeCounts(): Flow<LocalCounts>
+
+    @Query("""SELECT (SELECT COUNT(*) FROM exercises) AS exercises,
+        (SELECT COUNT(*) FROM workouts) AS workouts,
+        (SELECT COUNT(*) FROM sessions) AS sessions,
+        (SELECT COUNT(*) FROM session_sets) AS sets""")
+    abstract suspend fun getCounts(): LocalCounts
+
 
     // ===== Biblioteca de exercícios =====
 
@@ -193,6 +215,9 @@ abstract class GymDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) abstract suspend fun insertPendingDeletion(item: PendingDeletionEntity)
 
     @Query("DELETE FROM session_sets WHERE sessionPublicId = :sessionId") abstract suspend fun deleteSetsOfSession(sessionId: String)
+    @Query("DELETE FROM session_sets WHERE sessionPublicId = :sessionId AND workoutExercisePublicId = :exerciseId AND setNumber = :number")
+    abstract suspend fun deleteSet(sessionId: String, exerciseId: String, number: Int)
+
     @Query("DELETE FROM sessions WHERE publicId = :sessionId") abstract suspend fun deleteSession(sessionId: String)
 
     // ===== Pendências de sincronização =====
@@ -223,24 +248,24 @@ abstract class GymDao {
     )
     abstract fun observePendingChanges(): Flow<Int>
 
+    /** Mesmos filtros usados no envio: sessões abertas e suas séries ficam fora. */
+    @Query("""
+        SELECT
+          (SELECT COUNT(*) FROM exercises WHERE pendingSync = 1) +
+          (SELECT COUNT(*) FROM workouts WHERE pendingSync = 1) +
+          (SELECT COUNT(*) FROM workout_exercises WHERE pendingSync = 1) +
+          (SELECT COUNT(*) FROM sessions WHERE pendingSync = 1 AND finishedAt IS NOT NULL) +
+          (SELECT COUNT(*) FROM session_sets x JOIN sessions s ON s.publicId = x.sessionPublicId WHERE x.pendingSync = 1 AND s.finishedAt IS NOT NULL) +
+          (SELECT COUNT(*) FROM pending_deletions)
+    """)
+    abstract fun observeSendableChanges(): Flow<Int>
+
     // ===== Envio ao servidor (etapa 4) =====
     // Sessões em andamento (e suas séries) só são enviadas depois de finalizadas.
 
     @Query("SELECT * FROM exercises WHERE pendingSync = 1") abstract suspend fun pendingExercises(): List<ExerciseEntity>
     @Query("SELECT * FROM workouts WHERE pendingSync = 1") abstract suspend fun pendingWorkouts(): List<WorkoutEntity>
     @Query("SELECT * FROM workout_exercises WHERE pendingSync = 1") abstract suspend fun pendingWorkoutExercises(): List<WorkoutExerciseEntity>
-
-    @Query("SELECT * FROM sessions WHERE pendingSync = 1 AND finishedAt IS NOT NULL")
-    abstract suspend fun pendingFinishedSessions(): List<SessionEntity>
-
-    @Query(
-        """
-        SELECT x.* FROM session_sets x
-        JOIN sessions s ON s.publicId = x.sessionPublicId
-        WHERE x.pendingSync = 1 AND s.finishedAt IS NOT NULL
-        """
-    )
-    abstract suspend fun pendingSetsOfFinishedSessions(): List<SessionSetEntity>
 
     @Query("SELECT * FROM pending_deletions") abstract suspend fun pendingDeletions(): List<PendingDeletionEntity>
 
@@ -280,6 +305,28 @@ abstract class GymDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) abstract suspend fun insertWorkoutExercises(items: List<WorkoutExerciseEntity>)
     @Insert(onConflict = OnConflictStrategy.REPLACE) abstract suspend fun insertSessions(items: List<SessionEntity>)
     @Insert(onConflict = OnConflictStrategy.REPLACE) abstract suspend fun insertSets(items: List<SessionSetEntity>)
+
+    @Query("SELECT * FROM sessions WHERE pendingSync = 1 ORDER BY publicId")
+    abstract suspend fun allPendingSessions(): List<SessionEntity>
+
+    @Query("SELECT * FROM session_sets WHERE pendingSync = 1 ORDER BY publicId")
+    abstract suspend fun allPendingSets(): List<SessionSetEntity>
+
+    @Transaction
+    open suspend fun pendingSnapshot(): PendingChangesSnapshot {
+        val exercises = pendingExercises().sortedBy { it.publicId }
+        val sets = allPendingSets()
+        return PendingChangesSnapshot(
+            exercises = exercises,
+            muscles = if (exercises.isEmpty()) emptyList() else musclesOfExercises(exercises.map { it.publicId })
+                .sortedWith(compareBy({ it.exercisePublicId }, { it.targetMuscleId })),
+            workouts = pendingWorkouts().sortedBy { it.publicId },
+            workoutExercises = pendingWorkoutExercises().sortedBy { it.publicId },
+            sessions = allPendingSessions(), sets = sets,
+            setParents = if (sets.isEmpty()) emptyList() else sessionsByIds(sets.map { it.sessionPublicId }.distinct()).sortedBy { it.publicId },
+            deletions = pendingDeletions().sortedWith(compareBy({ it.entityType }, { it.publicId })),
+        )
+    }
 
     // ===== Operações em transação =====
     // Gravações que precisam acontecer juntas usam @Transaction do próprio Room: assim as
@@ -379,6 +426,8 @@ abstract class GymDao {
         sessionEntityType: String,
         deletedExerciseIds: List<String>,
         exerciseEntityType: String,
+        deletedSetIds: List<String>,
+        setEntityType: String,
     ) {
         markExercisesSynced(unchanged(exercises, exercisesByIds(exercises.map { it.publicId })) { it.publicId })
         markWorkoutsSynced(unchanged(workouts, workoutsByIds(workouts.map { it.publicId })) { it.publicId })
@@ -387,6 +436,7 @@ abstract class GymDao {
         markSetsSynced(unchanged(sets, setsByIds(sets.map { it.publicId })) { it.publicId })
         if (deletedSessionIds.isNotEmpty()) removePendingDeletions(sessionEntityType, deletedSessionIds)
         if (deletedExerciseIds.isNotEmpty()) removePendingDeletions(exerciseEntityType, deletedExerciseIds)
+        if (deletedSetIds.isNotEmpty()) removePendingDeletions(setEntityType, deletedSetIds)
     }
 
     private fun <T> unchanged(sent: List<T>, current: List<T>, id: (T) -> String): List<String> {

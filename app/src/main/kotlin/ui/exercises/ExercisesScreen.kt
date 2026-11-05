@@ -60,16 +60,18 @@ import br.com.ryuukossei.gymprogress.data.local.TargetMuscleEntity
 import br.com.ryuukossei.gymprogress.data.repository.GymRepository
 import br.com.ryuukossei.gymprogress.ui.common.EmptyMessage
 import br.com.ryuukossei.gymprogress.ui.common.LoadingBox
+import br.com.ryuukossei.gymprogress.ui.common.OperationErrorDialog
+import br.com.ryuukossei.gymprogress.ui.common.OperationRunner
 import br.com.ryuukossei.gymprogress.ui.common.appContainer
 import br.com.ryuukossei.gymprogress.ui.common.normalizeForSearch
+import java.text.Collator
+import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.text.Collator
-import java.util.Locale
 
 data class ExerciseItem(
     val exercise: ExerciseEntity,
@@ -123,22 +125,18 @@ class ExercisesViewModel(private val repository: GymRepository) : ViewModel() {
 
     fun refresh() = repository.notifyDataChanged()
 
-    /** Salva e devolve null em caso de sucesso, ou a mensagem de erro. */
-    fun save(publicId: String?, name: String, comment: String, muscleIds: List<Int>, onResult: (String?) -> Unit) {
-        viewModelScope.launch {
-            val error = try {
-                repository.saveExercise(publicId, name, comment, muscleIds)
-                null
-            } catch (e: IllegalArgumentException) {
-                e.message ?: "Dados inválidos."
-            }
-            onResult(error)
+    val operations = OperationRunner(viewModelScope)
+
+    fun save(publicId: String?, name: String, comment: String, muscleIds: List<Int>, onResult: (String?) -> Unit) =
+        operations.run(onError = { onResult(it) }) {
+            repository.saveExercise(publicId, name, comment, muscleIds)
+            onResult(null)
         }
+
+    fun delete(publicId: String, onResult: (Boolean) -> Unit) = operations.run {
+        onResult(repository.deleteExercise(publicId))
     }
 
-    fun delete(publicId: String, onResult: (Boolean) -> Unit) {
-        viewModelScope.launch { onResult(repository.deleteExercise(publicId)) }
-    }
 }
 
 /** Exercício aberto no editor: [item] nulo = novo exercício. */
@@ -152,6 +150,7 @@ fun ExercisesScreen() {
         factory = viewModelFactory { initializer { ExercisesViewModel(container.repository) } }
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    OperationErrorDialog(vm.operations)
     val query by vm.query.collectAsStateWithLifecycle()
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
 
@@ -285,7 +284,7 @@ private fun ExerciseCard(item: ExerciseItem, onEdit: () -> Unit, onDelete: () ->
                     Text(
                         item.muscleNames.joinToString(" • ").uppercase(),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = MaterialTheme.colorScheme.secondary,
                     )
                 }
                 item.exercise.comment?.takeIf { it.isNotBlank() }?.let {

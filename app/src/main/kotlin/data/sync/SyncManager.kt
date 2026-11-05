@@ -11,9 +11,10 @@ import br.com.ryuukossei.gymprogress.data.remote.SyncWorkoutExerciseDto
 import br.com.ryuukossei.gymprogress.data.repository.GymRepository
 import br.com.ryuukossei.gymprogress.data.repository.MissingTokenException
 import br.com.ryuukossei.gymprogress.data.settings.SettingsStore
+import java.time.Instant
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.time.Instant
 
 data class SyncResult(val sent: Int, val warnings: List<String>)
 
@@ -30,16 +31,22 @@ class SyncManager(
     private val api: GymApi,
     private val settings: SettingsStore,
     private val status: SyncStatusStore,
+    private val transferMutex: Mutex,
 ) {
     private val dao = db.gymDao()
-    private val mutex = Mutex()
 
-    suspend fun pushPending(): SyncResult = mutex.withLock {
+    suspend fun pushPending(): SyncResult = transferMutex.withLock {
         status.setRunning(true)
         try {
             val result = pushInternal()
-            status.recordSuccess(result.warnings)
+            when {
+                result.warnings.isNotEmpty() -> status.recordWarnings(result.warnings)
+                result.sent > 0 -> status.recordSuccess(emptyList())
+                else -> status.clearError()
+            }
             result
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             status.recordError(e.message ?: "Erro desconhecido ao sincronizar.")
             throw e
@@ -51,17 +58,19 @@ class SyncManager(
     private suspend fun pushInternal(): SyncResult {
         val token = settings.token() ?: throw MissingTokenException()
 
-        val exercises = dao.pendingExercises()
-        val muscles = if (exercises.isEmpty()) emptyList() else dao.musclesOfExercises(exercises.map { it.publicId })
-        val workouts = dao.pendingWorkouts()
-        val workoutExercises = dao.pendingWorkoutExercises()
-        val sessions = dao.pendingFinishedSessions()
-        val sets = dao.pendingSetsOfFinishedSessions()
-        val deletions = dao.pendingDeletions()
-        val deletedSessions = deletions.filter { it.entityType == GymRepository.ENTITY_SESSION }.map { it.publicId }
-        val deletedExercises = deletions.filter { it.entityType == GymRepository.ENTITY_EXERCISE }.map { it.publicId }
-
-        val total = exercises.size + workouts.size + workoutExercises.size + sessions.size + sets.size + deletedSessions.size + deletedExercises.size
+        val snapshot = dao.pendingSnapshot()
+        val exercises = snapshot.exercises
+        val muscles = snapshot.muscles
+        val workouts = snapshot.workouts
+        val workoutExercises = snapshot.workoutExercises
+        val sessions = snapshot.sessions.filter { it.finishedAt != null }
+        val finishedIds = snapshot.setParents.filter { it.finishedAt != null }.map { it.publicId }.toSet()
+        val sets = snapshot.sets.filter { it.sessionPublicId in finishedIds }
+        val deletedSessions = snapshot.deletions.filter { it.entityType == GymRepository.ENTITY_SESSION }.map { it.publicId }
+        val deletedExercises = snapshot.deletions.filter { it.entityType == GymRepository.ENTITY_EXERCISE }.map { it.publicId }
+        val deletedSets = snapshot.deletions.filter { it.entityType == GymRepository.ENTITY_SET }.map { it.publicId }
+        val total = exercises.size + workouts.size + workoutExercises.size + sessions.size + sets.size +
+            deletedSessions.size + deletedExercises.size + deletedSets.size
         if (total == 0) return SyncResult(0, emptyList())
 
         val musclesByExercise = muscles.groupBy({ it.exercisePublicId }, { it.targetMuscleId })
@@ -94,14 +103,20 @@ class SyncManager(
             },
             deletedExercises = deletedExercises,
             deletedSessions = deletedSessions,
+            deletedSets = deletedSets,
         )
 
         val response = api.push(settings.state.value.baseUrl, token, batch)
+
+        // Sem confirmação por registro, avisos podem indicar rejeição parcial.
+        // Mantemos o lote pendente: o reenvio é idempotente pelos PublicIds.
+        if (response.warnings.isNotEmpty()) return SyncResult(0, response.warnings)
 
         dao.markPushed(
             exercises, workouts, workoutExercises, sessions, sets,
             deletedSessions, GymRepository.ENTITY_SESSION,
             deletedExercises, GymRepository.ENTITY_EXERCISE,
+            deletedSets, GymRepository.ENTITY_SET,
         )
 
         return SyncResult(total, response.warnings)

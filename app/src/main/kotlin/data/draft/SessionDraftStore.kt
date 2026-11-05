@@ -44,6 +44,8 @@ class SessionDraftStore(context: Context) {
         write(sessionId, draft.copy(sets = draft.sets + (key to updated)))
     }
 
+    fun clearAll() = prefs.edit { clear() }
+
     fun clear(sessionId: String) = prefs.edit { remove(sessionId) }
 
     private fun write(sessionId: String, draft: SessionDraft) =

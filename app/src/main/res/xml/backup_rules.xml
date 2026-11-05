@@ -3,4 +3,6 @@
      criptografado com uma chave do Keystore que não é restaurada em outro aparelho. -->
 <full-backup-content>
     <exclude domain="sharedpref" path="gymprogress_secure.xml" />
+    <!-- Alarmes não são restaurados pelo backup; não recuperar um cronômetro antigo. -->
+    <exclude domain="sharedpref" path="gymprogress_timer.xml" />
 </full-backup-content>

@@ -40,6 +40,17 @@ class SyncStatusStore(context: Context) {
         _state.value = _state.value.copy(lastSuccessAt = now, lastError = null, lastWarnings = warnings)
     }
 
+    fun recordWarnings(warnings: List<String>) {
+        prefs.edit { remove(KEY_LAST_ERROR); putString(KEY_WARNINGS, warnings.joinToString(SEPARATOR)) }
+        _state.value = _state.value.copy(lastError = null, lastWarnings = warnings)
+    }
+
+    /** Nenhum lote foi enviado: não inventa um horário de sucesso. */
+    fun clearError() {
+        prefs.edit { remove(KEY_LAST_ERROR) }
+        _state.value = _state.value.copy(lastError = null)
+    }
+
     fun recordError(message: String) {
         prefs.edit { putString(KEY_LAST_ERROR, message) }
         _state.value = _state.value.copy(lastError = message)

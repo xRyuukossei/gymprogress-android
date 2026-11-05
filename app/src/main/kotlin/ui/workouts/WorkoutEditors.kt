@@ -26,8 +26,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -322,7 +322,7 @@ fun AddPlannedExerciseDialog(
                         Column {
                             Text(selected.exercise.name, style = MaterialTheme.typography.titleMedium)
                             if (selected.muscleNames.isNotEmpty()) {
-                                Text(selected.muscleNames.joinToString(" • ").uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                Text(selected.muscleNames.joinToString(" • ").uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
                             }
                             if (selected.exercise.publicId in alreadyInWorkout) {
                                 Text("Este exercício já está no treino; ele será adicionado de novo.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

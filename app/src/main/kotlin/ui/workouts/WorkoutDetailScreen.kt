@@ -55,6 +55,8 @@ import br.com.ryuukossei.gymprogress.data.repository.GymRepository
 import br.com.ryuukossei.gymprogress.data.repository.GymRepository.PlannedValues
 import br.com.ryuukossei.gymprogress.ui.common.EmptyMessage
 import br.com.ryuukossei.gymprogress.ui.common.LoadingBox
+import br.com.ryuukossei.gymprogress.ui.common.OperationErrorDialog
+import br.com.ryuukossei.gymprogress.ui.common.OperationRunner
 import br.com.ryuukossei.gymprogress.ui.common.SectionTitle
 import br.com.ryuukossei.gymprogress.ui.common.appContainer
 import br.com.ryuukossei.gymprogress.ui.common.formatDateTime
@@ -62,13 +64,13 @@ import br.com.ryuukossei.gymprogress.ui.common.formatRest
 import br.com.ryuukossei.gymprogress.ui.common.formatWeight
 import br.com.ryuukossei.gymprogress.ui.exercises.ExerciseEditorDialog
 import br.com.ryuukossei.gymprogress.ui.exercises.ExerciseItem
+import java.text.Collator
+import java.util.Locale
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.text.Collator
-import java.util.Locale
 
 data class PlannedExerciseItem(val row: PlannedExerciseRow, val muscles: List<String>)
 
@@ -141,27 +143,18 @@ class WorkoutDetailViewModel(private val repository: GymRepository, private val 
 
     fun refresh() = repository.notifyDataChanged()
 
-    fun start(onStarted: (String) -> Unit) {
-        viewModelScope.launch { onStarted(repository.startSession(workoutId)) }
-    }
+    val operations = OperationRunner(viewModelScope)
 
-    /** Executa uma gravação; devolve null em caso de sucesso ou a mensagem de erro de validação. */
-    private fun run(onResult: (String?) -> Unit, block: suspend () -> Unit) {
-        viewModelScope.launch {
-            val error = try {
-                block(); null
-            } catch (e: IllegalArgumentException) {
-                e.message ?: "Dados inválidos."
-            }
-            onResult(error)
-        }
-    }
+    fun start(onStarted: (String) -> Unit) = operations.run { onStarted(repository.startSession(workoutId)) }
+
+    private fun run(onResult: (String?) -> Unit, block: suspend () -> Unit) =
+        operations.run(onError = { onResult(it) }) { block(); onResult(null) }
 
     fun saveWorkout(name: String, category: String, comment: String, onResult: (String?) -> Unit) =
         run(onResult) { repository.saveWorkout(workoutId, name, category, comment) }
 
-    fun setArchived(archived: Boolean, onDone: () -> Unit) {
-        viewModelScope.launch { repository.setWorkoutArchived(workoutId, archived); onDone() }
+    fun setArchived(archived: Boolean, onDone: () -> Unit) = operations.run {
+        repository.setWorkoutArchived(workoutId, archived); onDone()
     }
 
     fun addExercise(exerciseId: String, values: PlannedValues, onResult: (String?) -> Unit) =
@@ -170,23 +163,14 @@ class WorkoutDetailViewModel(private val repository: GymRepository, private val 
     fun updateExercise(publicId: String, values: PlannedValues, onResult: (String?) -> Unit) =
         run(onResult) { repository.updatePlannedExercise(publicId, values) }
 
-    fun removeExercise(publicId: String) {
-        viewModelScope.launch { repository.removePlannedExercise(publicId) }
-    }
+    fun removeExercise(publicId: String) = operations.run { repository.removePlannedExercise(publicId) }
+    fun move(publicId: String, direction: Int) = operations.run { repository.movePlannedExercise(workoutId, publicId, direction) }
 
-    fun move(publicId: String, direction: Int) {
-        viewModelScope.launch { repository.movePlannedExercise(workoutId, publicId, direction) }
-    }
-
-    fun createExercise(name: String, comment: String, muscleIds: List<Int>, onResult: (id: String?, error: String?) -> Unit) {
-        viewModelScope.launch {
-            try {
-                onResult(repository.saveExercise(null, name, comment, muscleIds), null)
-            } catch (e: IllegalArgumentException) {
-                onResult(null, e.message ?: "Dados inválidos.")
-            }
+    fun createExercise(name: String, comment: String, muscleIds: List<Int>, onResult: (id: String?, error: String?) -> Unit) =
+        operations.run(onError = { onResult(null, it) }) {
+            onResult(repository.saveExercise(null, name, comment, muscleIds), null)
         }
-    }
+
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -201,7 +185,8 @@ fun WorkoutDetailScreen(workoutId: String, onBack: () -> Unit, onRunSession: (St
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
 
     var confirmContinue by remember { mutableStateOf<SessionEntity?>(null) }
-    var starting by remember { mutableStateOf(false) }
+    val starting by vm.operations.working.collectAsStateWithLifecycle()
+    OperationErrorDialog(vm.operations)
     var editingWorkout by remember { mutableStateOf(false) }
     var confirmArchive by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
@@ -248,14 +233,13 @@ fun WorkoutDetailScreen(workoutId: String, onBack: () -> Unit, onRunSession: (St
                             if (inProgress != null) {
                                 confirmContinue = inProgress
                             } else if (!starting) {
-                                starting = true
-                                vm.start { id -> starting = false; onRunSession(id) }
+                                vm.start(onRunSession)
                             }
                         },
-                        enabled = !starting,
+                        enabled = !starting && (!s.workout.isArchived || inProgress != null),
                         modifier = Modifier.fillMaxWidth().height(52.dp),
                     ) {
-                        Text(if (inProgress != null) "Continuar treino em andamento" else "Iniciar treino")
+                        Text(if (inProgress != null) "Continuar treino em andamento" else if (s.workout.isArchived) "Treino arquivado" else "Iniciar treino")
                     }
                 }
             }
@@ -276,7 +260,7 @@ fun WorkoutDetailScreen(workoutId: String, onBack: () -> Unit, onRunSession: (St
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(workout.category.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                            Text(workout.category.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.secondary)
                             if (workout.isArchived) {
                                 Text("ARQUIVADO", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }

@@ -5,19 +5,20 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.core.content.edit
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 data class SettingsState(
     val baseUrl: String,
     val hasToken: Boolean,
     val lastImportAt: Long?,
+    val isDarkTheme: Boolean = true,
 )
 
 /**
@@ -38,9 +39,14 @@ class SettingsStore(context: Context) {
         return cipher.decrypt(stored)
     }
 
-    fun saveConnection(baseUrl: String, token: String) {
-        prefs.edit { putString(KEY_BASE_URL, baseUrl) }
-        securePrefs.edit { putString(KEY_TOKEN, cipher.encrypt(token)) }
+    internal class PreparedConnection(val baseUrl: String, val ciphertext: String)
+
+    /** Falhas do Keystore acontecem antes de substituir o banco importado. */
+    internal fun prepareConnection(baseUrl: String, token: String) = PreparedConnection(baseUrl, cipher.encrypt(token))
+
+    internal fun saveConnection(connection: PreparedConnection) {
+        securePrefs.edit { putString(KEY_TOKEN, connection.ciphertext) }
+        prefs.edit { putString(KEY_BASE_URL, connection.baseUrl) }
         _state.value = loadState()
     }
 
@@ -54,17 +60,24 @@ class SettingsStore(context: Context) {
         _state.value = loadState()
     }
 
+    fun setDarkTheme(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_DARK_THEME, enabled) }
+        _state.value = _state.value.copy(isDarkTheme = enabled)
+    }
+
     private fun loadState() = SettingsState(
         baseUrl = prefs.getString(KEY_BASE_URL, DEFAULT_BASE_URL) ?: DEFAULT_BASE_URL,
         // Se o token não puder ser decifrado (ex.: chave perdida), o app pede o token de novo.
         hasToken = token() != null,
         lastImportAt = prefs.getLong(KEY_LAST_IMPORT, 0L).takeIf { it > 0L },
+        isDarkTheme = prefs.getBoolean(KEY_DARK_THEME, true),
     )
 
     companion object {
         const val DEFAULT_BASE_URL = "https://api.ryuukossei.com.br"
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_LAST_IMPORT = "last_import_at"
+        private const val KEY_DARK_THEME = "dark_theme"
         private const val KEY_TOKEN = "api_token"
     }
 }

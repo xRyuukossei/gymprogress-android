@@ -1,5 +1,6 @@
 package br.com.ryuukossei.gymprogress.data.repository
 
+import androidx.room.withTransaction
 import br.com.ryuukossei.gymprogress.data.local.AppDatabase
 import br.com.ryuukossei.gymprogress.data.local.ExerciseEntity
 import br.com.ryuukossei.gymprogress.data.local.ExerciseTargetMuscleEntity
@@ -9,16 +10,21 @@ import br.com.ryuukossei.gymprogress.data.local.SessionSetEntity
 import br.com.ryuukossei.gymprogress.data.local.TargetMuscleEntity
 import br.com.ryuukossei.gymprogress.data.local.WorkoutEntity
 import br.com.ryuukossei.gymprogress.data.local.WorkoutExerciseEntity
+import br.com.ryuukossei.gymprogress.data.remote.ApiException
 import br.com.ryuukossei.gymprogress.data.remote.GymApi
 import br.com.ryuukossei.gymprogress.data.remote.SyncExportDto
+import br.com.ryuukossei.gymprogress.data.remote.canonicalPublicId
+import br.com.ryuukossei.gymprogress.data.remote.validateSyncExport
 import br.com.ryuukossei.gymprogress.data.settings.SettingsStore
+import java.time.Instant
+import java.util.UUID
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
-import java.time.Instant
-import java.util.UUID
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class ImportResult(
     val exercises: Int,
@@ -40,6 +46,8 @@ class GymRepository(
     private val db: AppDatabase,
     private val api: GymApi,
     private val settings: SettingsStore,
+    private val transferMutex: Mutex,
+    private val onDataReplaced: () -> Unit = {},
     /** Avisado quando há algo novo para enviar ao servidor (ex.: treino finalizado). */
     private val onLocalChange: () -> Unit = {},
 ) {
@@ -57,68 +65,108 @@ class GymRepository(
     @OptIn(ExperimentalCoroutinesApi::class)
     fun <T> observe(query: () -> Flow<T>): Flow<T> = dataVersion.flatMapLatest { query() }
 
-    /** Configuração inicial: valida o token baixando os dados e, se der certo, salva a conexão. */
-    suspend fun connectAndImport(baseUrl: String, token: String): ImportResult {
+    /** Importação e envio compartilham o lock; gravações do treino continuam disponíveis durante a rede. */
+    suspend fun connectAndImport(baseUrl: String, token: String): ImportResult = transferMutex.withLock {
         val url = GymApi.normalizeBaseUrl(baseUrl)
-        val export = api.export(url, token.trim())
-        // Ao trocar o token, alterações locais ainda não enviadas nunca são descartadas:
-        // nesse caso só a conexão é salva, sem substituir os dados.
-        val pending = dao.countPendingChanges()
-        val result = if (pending == 0) {
-            replaceLocalData(export).also { settings.setLastImportAt(System.currentTimeMillis()) }
-        } else {
-            ImportResult(export.exercises.size, export.workouts.size, export.sessions.size, export.sets.size)
+        val before = dao.pendingSnapshot()
+        val preserveLocal = !before.isEmpty || dao.countInProgressSessions() > 0
+        require(!preserveLocal || url == GymApi.normalizeBaseUrl(settings.state.value.baseUrl)) {
+            "Envie ou resolva as alterações locais antes de conectar a outro servidor."
         }
-        settings.saveConnection(url, token.trim())
+        val export = api.export(url, token.trim())
+        val connection = settings.prepareConnection(url, token.trim())
+        val result = db.withTransaction {
+            check(dao.pendingSnapshot() == before) { "Os dados locais mudaram durante o download. Tente novamente." }
+            if (!preserveLocal) {
+                replaceLocalData(export)
+            } else {
+                val counts = dao.getCounts()
+                ImportResult(counts.exercises, counts.workouts, counts.sessions, counts.sets)
+            }
+        }
+        settings.saveConnection(connection)
+        if (!preserveLocal) {
+            settings.setLastImportAt(System.currentTimeMillis())
+            onDataReplaced()
+        }
         notifyDataChanged()
-        return result
+        result
     }
 
-    /**
-     * Baixa tudo de novo do servidor. Sem [discardLocalChanges], recusa se houver
-     * alterações do celular ainda não enviadas (para nunca perdê-las sem querer).
-     */
-    suspend fun reimport(discardLocalChanges: Boolean = false): ImportResult {
-        val pending = dao.countPendingChanges()
-        if (pending > 0 && !discardLocalChanges) throw PendingChangesException(pending)
-
+    suspend fun reimport(discardLocalChanges: Boolean = false): ImportResult = transferMutex.withLock {
+        val before = dao.pendingSnapshot()
+        if (!before.isEmpty && !discardLocalChanges) throw PendingChangesException(dao.countPendingChanges())
+        check(discardLocalChanges || dao.countInProgressSessions() == 0) {
+            "Há treino em andamento. Finalize-o, cancele-o ou confirme explicitamente o descarte antes de reimportar."
+        }
         val token = settings.token() ?: throw MissingTokenException()
         val export = api.export(settings.state.value.baseUrl, token)
-        val result = replaceLocalData(export)
+        val result = db.withTransaction {
+            check(dao.pendingSnapshot() == before) { "Os dados locais mudaram durante o download. Confira as alterações e tente novamente." }
+            replaceLocalData(export)
+        }
         settings.setLastImportAt(System.currentTimeMillis())
+        onDataReplaced()
         notifyDataChanged()
-        return result
+        result
     }
 
-    fun disconnect() = settings.clearToken()
+    suspend fun disconnect() = transferMutex.withLock { settings.clearToken() }
 
     // ===== Execução do treino (tudo grava primeiro no celular) =====
 
     /** Cria uma sessão em andamento para o treino e devolve o id. */
     suspend fun startSession(workoutId: String): String {
-        val session = SessionEntity(
-            publicId = newId(),
-            workoutPublicId = workoutId,
-            startedAt = System.currentTimeMillis(),
-            finishedAt = null,
-            notes = null,
-            pendingSync = true,
-        )
-        dao.upsertSession(session)
+        val id = db.withTransaction {
+            val existing = dao.findInProgressSession(workoutId)
+            if (existing != null) return@withTransaction existing.publicId
+            val workout = dao.getWorkout(workoutId) ?: error("Treino não encontrado.")
+            check(!workout.isArchived) { "Restaure este treino antes de iniciá-lo." }
+            check(dao.activeWorkoutExercises(workoutId).isNotEmpty()) { "Adicione exercícios antes de iniciar este treino." }
+            val session = SessionEntity(newId(), workoutId, System.currentTimeMillis(), null, null, pendingSync = true)
+            dao.upsertSession(session)
+            session.publicId
+        }
         notifyDataChanged()
-        return session.publicId
+        return id
     }
 
-    /** Grava (ou atualiza) uma série confirmada. */
-    suspend fun saveSet(sessionId: String, workoutExerciseId: String, setNumber: Int, reps: Int, weight: Double) {
-        dao.saveSet(sessionId, workoutExerciseId, setNumber, reps, weight, newId = newId())
+    /** Todas as séries do lote são gravadas juntas; uma sessão encerrada não pode ser alterada. */
+    suspend fun saveSessionSets(sessionId: String, exerciseId: String, values: List<Triple<Int, Int, Double>>) {
+        db.withTransaction {
+            val session = dao.getSession(sessionId) ?: error("Treino não encontrado.")
+            check(session.finishedAt == null) { "Este treino já foi finalizado." }
+            val exercise = requireNotNull(dao.getWorkoutExercise(exerciseId)) { "Exercício do treino não encontrado." }
+            require(exercise.workoutPublicId == session.workoutPublicId && exercise.removedAt == null) { "Este exercício não pertence ao treino em andamento." }
+            require(values.map { it.first }.distinct().size == values.size) { "Há séries duplicadas no lote." }
+            values.forEach { (number, reps, weight) ->
+                require(number in 1..exercise.sets) { "Número da série inválido." }
+                require(reps in 0..100 && weight.isFinite() && weight in 0.0..1000.0) { "Revise a carga e as repetições." }
+                dao.saveSet(sessionId, exerciseId, number, reps, weight, newId())
+            }
+        }
+        notifyDataChanged()
+    }
+
+    suspend fun unconfirmSet(sessionId: String, exerciseId: String, number: Int) {
+        db.withTransaction {
+            val session = dao.getSession(sessionId) ?: error("Treino não encontrado.")
+            check(session.finishedAt == null) { "Este treino já foi finalizado." }
+            val saved = dao.findSet(sessionId, exerciseId, number) ?: return@withTransaction
+            dao.deleteSet(sessionId, exerciseId, number)
+            // Mesmo uma série importada precisa ser removida no servidor ao desfazer.
+            dao.insertPendingDeletion(PendingDeletionEntity(ENTITY_SET, saved.publicId))
+        }
         notifyDataChanged()
     }
 
     suspend fun finishSession(sessionId: String) {
-        val session = dao.getSession(sessionId) ?: return
-        if (session.finishedAt != null) return
-        dao.upsertSession(session.copy(finishedAt = System.currentTimeMillis(), pendingSync = true))
+        db.withTransaction {
+            val session = dao.getSession(sessionId) ?: error("Treino não encontrado.")
+            if (session.finishedAt == null) {
+                dao.upsertSession(session.copy(finishedAt = System.currentTimeMillis(), pendingSync = true))
+            }
+        }
         notifyDataChanged()
         onLocalChange()
     }
@@ -148,6 +196,7 @@ class GymRepository(
         require((cleanComment?.length ?: 0) <= 500) { "A observação pode ter no máximo 500 caracteres." }
         require(muscleIds.isNotEmpty()) { "Selecione ao menos um grupo muscular." }
 
+        if (publicId != null) requireNotNull(dao.getExercise(publicId)) { "Este exercício não existe mais. Atualize a lista." }
         val id = publicId ?: newId()
         require(dao.findExerciseByName(cleanName, exceptId = id) == null) { "Já existe um exercício com esse nome." }
 
@@ -180,7 +229,7 @@ class GymRepository(
         require(cleanCategory.length <= 100) { "A categoria pode ter no máximo 100 caracteres." }
         require((cleanComment?.length ?: 0) <= 500) { "A observação pode ter no máximo 500 caracteres." }
 
-        val existing = publicId?.let { dao.getWorkout(it) }
+        val existing = publicId?.let { requireNotNull(dao.getWorkout(it)) { "Este treino não existe mais. Atualize a lista." } }
         val workout = WorkoutEntity(
             publicId = existing?.publicId ?: newId(),
             name = cleanName,
@@ -195,7 +244,7 @@ class GymRepository(
     }
 
     suspend fun setWorkoutArchived(publicId: String, archived: Boolean) {
-        val workout = dao.getWorkout(publicId) ?: return
+        val workout = requireNotNull(dao.getWorkout(publicId)) { "Treino não encontrado." }
         if (workout.isArchived == archived) return
         dao.upsertWorkout(workout.copy(isArchived = archived, pendingSync = true))
         changed()
@@ -214,7 +263,7 @@ class GymRepository(
     private fun validate(values: PlannedValues): PlannedValues {
         require(values.sets in 1..20) { "Séries: de 1 a 20." }
         require(values.repetitions in 0..100) { "Repetições: de 0 a 100." }
-        require(values.weight in 0.0..1000.0) { "Carga: de 0 a 1000 kg." }
+        require(values.weight.isFinite() && values.weight in 0.0..1000.0) { "Carga: de 0 a 1000 kg." }
         require(values.restTimeSeconds in 0..3600) { "Descanso: de 0 a 3600 segundos." }
         val notes = values.notes?.trim()?.takeIf { it.isNotEmpty() }
         require((notes?.length ?: 0) <= 500) { "A observação pode ter no máximo 500 caracteres." }
@@ -243,7 +292,7 @@ class GymRepository(
 
     suspend fun updatePlannedExercise(publicId: String, values: PlannedValues) {
         val v = validate(values)
-        val item = dao.getWorkoutExercise(publicId) ?: return
+        val item = requireNotNull(dao.getWorkoutExercise(publicId)) { "Exercício do treino não encontrado." }
         dao.upsertWorkoutExercise(
             item.copy(
                 sets = v.sets,
@@ -259,7 +308,7 @@ class GymRepository(
 
     /** Remove do treino (remoção lógica: as séries já feitas continuam no histórico). */
     suspend fun removePlannedExercise(publicId: String) {
-        val item = dao.getWorkoutExercise(publicId) ?: return
+        val item = requireNotNull(dao.getWorkoutExercise(publicId)) { "Exercício do treino não encontrado." }
         if (item.removedAt != null) return
         dao.upsertWorkoutExercise(item.copy(removedAt = System.currentTimeMillis(), pendingSync = true))
         changed()
@@ -279,11 +328,15 @@ class GymRepository(
     private fun newId() = UUID.randomUUID().toString()
 
     companion object {
+        const val ENTITY_SET = "set"
         const val ENTITY_SESSION = "session"
         const val ENTITY_EXERCISE = "exercise"
     }
 
     private suspend fun replaceLocalData(export: SyncExportDto): ImportResult {
+        try { validateSyncExport(export) }
+        catch (e: IllegalArgumentException) { throw ApiException.InvalidResponse(e, e.message) }
+        catch (e: java.time.format.DateTimeParseException) { throw ApiException.InvalidResponse(e, "Há uma data fora do formato ISO-8601 esperado.") }
         val exercises = export.exercises.map {
             ExerciseEntity(publicId = id(it.publicId), name = it.name, comment = it.comment)
         }
@@ -351,7 +404,7 @@ class GymRepository(
         )
     }
 
-    private fun id(value: String) = value.lowercase()
+    private fun id(value: String) = canonicalPublicId(value)
 
     private fun epochMillis(iso: String): Long = Instant.parse(iso).toEpochMilli()
 }

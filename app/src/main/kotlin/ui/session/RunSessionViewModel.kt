@@ -11,6 +11,7 @@ import br.com.ryuukossei.gymprogress.data.local.SessionSetEntity
 import br.com.ryuukossei.gymprogress.data.repository.GymRepository
 import br.com.ryuukossei.gymprogress.timer.RestTimer
 import br.com.ryuukossei.gymprogress.timer.RestTimerState
+import br.com.ryuukossei.gymprogress.ui.common.OperationRunner
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -20,7 +21,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 
 /** Última execução do mesmo exercício (sessão finalizada mais recente). */
 data class PreviousExecution(val date: Long, val sets: Map<Int, PreviousSetRow>)
@@ -51,6 +51,12 @@ class RunSessionViewModel(
     private val drafts: SessionDraftStore,
     private val timer: RestTimer,
 ) : ViewModel() {
+
+    private val operations = OperationRunner(viewModelScope)
+    val working = operations.working
+    val error = operations.error
+    fun dismissError() = operations.dismissError()
+    private fun write(action: suspend () -> Unit) = operations.run(block = action)
 
     private val dao = repository.dao
     private var draft = drafts.load(sessionId)
@@ -122,32 +128,45 @@ class RunSessionViewModel(
         drafts.saveSet(sessionId, workoutExerciseId, setNumber, weight = weight, reps = reps)
     }
 
-    /** Confirma a série (grava no banco local) e inicia o descanso. */
-    fun confirmSet(workoutExerciseId: String, setNumber: Int, reps: Int, weight: Double) {
-        viewModelScope.launch {
-            repository.saveSet(sessionId, workoutExerciseId, setNumber, reps, weight)
-            timer.start(_restBase.value, sessionId)
+    /** Confirma uma série individual e inicia o descanso, sem trocar de exercício. */
+    fun confirmSet(exerciseId: String, number: Int, reps: Int, weight: Double) = write {
+        updateDraft(exerciseId, number, reps, weight)
+        repository.saveSessionSets(sessionId, exerciseId, listOf(Triple(number, reps, weight)))
+        timer.start(_restBase.value, sessionId)
+    }
+
+    fun unconfirmSet(exerciseId: String, number: Int) = write {
+        val exercise = (state.value as? RunUiState.Ready)?.exercises?.firstOrNull { it.planned.publicId == exerciseId }
+        exercise?.saved?.get(number)?.let { updateDraft(exerciseId, number, it.performedRepetitions, it.performedWeight) }
+        repository.unconfirmSet(sessionId, exerciseId, number)
+    }
+
+    fun confirmPending(exercise: RunExercise) = write {
+        val p = exercise.planned
+        val values = (1..p.sets).filter { it !in exercise.saved }.map { number ->
+            val d = draftFor(p.publicId, number)
+            val previous = exercise.previous?.sets?.get(number)
+            Triple(number, d?.reps ?: previous?.performedRepetitions ?: p.repetitions,
+                d?.weight ?: previous?.performedWeight ?: p.weight)
         }
+        repository.saveSessionSets(sessionId, p.publicId, values)
+        values.forEach { (number, reps, weight) -> updateDraft(p.publicId, number, reps, weight) }
     }
 
     fun startTimer() = timer.start(_restBase.value, sessionId)
-
     fun stopTimer() = timer.stop()
+    fun resumeTimer() = timer.resume()
 
-    fun finish(onDone: () -> Unit) {
-        viewModelScope.launch {
-            repository.finishSession(sessionId)
-            cleanUp()
-            onDone()
-        }
+    fun finish(onDone: () -> Unit) = write {
+        repository.finishSession(sessionId)
+        cleanUp()
+        onDone()
     }
 
-    fun cancel(onDone: () -> Unit) {
-        viewModelScope.launch {
-            repository.cancelSession(sessionId)
-            cleanUp()
-            onDone()
-        }
+    fun cancel(onDone: () -> Unit) = write {
+        repository.cancelSession(sessionId)
+        cleanUp()
+        onDone()
     }
 
     private fun cleanUp() {

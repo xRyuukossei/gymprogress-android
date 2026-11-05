@@ -24,8 +24,9 @@ import androidx.navigation.navArgument
 import br.com.ryuukossei.gymprogress.R
 import br.com.ryuukossei.gymprogress.ui.exercises.ExercisesScreen
 import br.com.ryuukossei.gymprogress.ui.history.HistoryScreen
-import br.com.ryuukossei.gymprogress.ui.home.HomeScreen
 import br.com.ryuukossei.gymprogress.ui.history.SessionDetailScreen
+import br.com.ryuukossei.gymprogress.ui.history.SessionSummaryScreen
+import br.com.ryuukossei.gymprogress.ui.home.HomeScreen
 import br.com.ryuukossei.gymprogress.ui.session.RunSessionScreen
 import br.com.ryuukossei.gymprogress.ui.settings.SettingsScreen
 import br.com.ryuukossei.gymprogress.ui.workouts.WorkoutDetailScreen
@@ -39,10 +40,12 @@ private object Routes {
     const val SESSION = "session/{id}"
     const val EXERCISES = "exercises"
     const val SETTINGS = "settings"
+    const val SUMMARY = "summary/{id}"
     const val RUN = "run/{id}"
 
     fun workout(id: String) = "workout/$id"
     fun session(id: String) = "session/$id"
+    fun summary(id: String) = "summary/$id"
     fun run(id: String) = "run/$id"
 }
 
@@ -52,7 +55,7 @@ private val tabs = listOf(
     Tab(Routes.HOME, "Início", R.drawable.ic_nav_home, listOf(Routes.HOME)),
     Tab(Routes.WORKOUTS, "Treinos", R.drawable.ic_nav_workouts, listOf(Routes.WORKOUTS, Routes.WORKOUT)),
     Tab(Routes.EXERCISES, "Exercícios", R.drawable.ic_nav_exercises, listOf(Routes.EXERCISES)),
-    Tab(Routes.HISTORY, "Histórico", R.drawable.ic_nav_history, listOf(Routes.HISTORY, Routes.SESSION)),
+    Tab(Routes.HISTORY, "Histórico", R.drawable.ic_nav_history, listOf(Routes.HISTORY, Routes.SESSION, Routes.SUMMARY)),
     Tab(Routes.SETTINGS, "Ajustes", R.drawable.ic_nav_settings, listOf(Routes.SETTINGS)),
 )
 
@@ -98,7 +101,8 @@ fun MainNavigation(sessionToOpen: String? = null, onSessionOpened: () -> Unit = 
             modifier = Modifier.padding(padding),
         ) {
             composable(Routes.HOME) {
-                HomeScreen(onOpenWorkouts = { navController.navigateToTab(Routes.WORKOUTS) })
+                HomeScreen(onOpenWorkouts = { navController.navigateToTab(Routes.WORKOUTS) },
+                    onRunSession = { navController.navigate(Routes.run(it)) { launchSingleTop = true } })
             }
             composable(Routes.WORKOUTS) {
                 WorkoutsScreen(
@@ -124,10 +128,17 @@ fun MainNavigation(sessionToOpen: String? = null, onSessionOpened: () -> Unit = 
                         }
                     },
                     onFinished = { id ->
-                        navController.navigate(Routes.session(id)) {
+                        navController.navigate(Routes.summary(id)) {
                             popUpTo(navController.graph.findStartDestination().id)
                         }
                     },
+                )
+            }
+            composable(Routes.SUMMARY, arguments = listOf(navArgument("id") { type = NavType.StringType })) { entry ->
+                val id = entry.arguments?.getString("id").orEmpty()
+                SessionSummaryScreen(id,
+                    onDetails = { navController.navigate(Routes.session(id)) { popUpTo(Routes.SUMMARY) { inclusive = true } } },
+                    onHome = { navController.navigateToTab(Routes.WORKOUTS) },
                 )
             }
             composable(Routes.EXERCISES) { ExercisesScreen() }
@@ -146,6 +157,20 @@ fun MainNavigation(sessionToOpen: String? = null, onSessionOpened: () -> Unit = 
 }
 
 private fun NavHostController.navigateToTab(route: String) {
+    // Início é a raiz desta pilha. Restaurar seu estado pode restaurar também
+    // Treinos, salvo acima dela depois de sair de uma execução iniciada no Início.
+    // Volta à entrada existente da raiz, sem restaurar destinos filhos.
+    if (route == Routes.HOME) {
+        if (currentDestination?.route == Routes.HOME) return
+        if (!popBackStack(Routes.HOME, inclusive = false)) {
+            navigate(Routes.HOME) {
+                popUpTo(graph.id) { inclusive = false }
+                launchSingleTop = true
+                restoreState = false
+            }
+        }
+        return
+    }
     navigate(route) {
         popUpTo(graph.findStartDestination().id) { saveState = true }
         launchSingleTop = true

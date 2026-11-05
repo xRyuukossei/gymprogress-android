@@ -9,10 +9,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import br.com.ryuukossei.gymprogress.data.remote.canonicalPublicId
 import br.com.ryuukossei.gymprogress.timer.RestTimer
 import br.com.ryuukossei.gymprogress.ui.common.appContainer
 import br.com.ryuukossei.gymprogress.ui.navigation.MainNavigation
@@ -29,7 +33,14 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         if (savedInstanceState == null) readSessionExtra(intent)
         setContent {
-            GymProgressTheme {
+            val settings by (application as GymProgressApp).container.settings.state.collectAsStateWithLifecycle()
+            val view = LocalView.current
+            SideEffect {
+                val bars = WindowCompat.getInsetsController(window, view)
+                bars.isAppearanceLightStatusBars = !settings.isDarkTheme
+                bars.isAppearanceLightNavigationBars = !settings.isDarkTheme
+            }
+            GymProgressTheme(darkTheme = settings.isDarkTheme) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     AppRoot(
                         sessionToOpen = sessionToOpen.value,
@@ -51,11 +62,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun readSessionExtra(intent: Intent?) {
-        val sessionId = intent?.getStringExtra(RestTimer.EXTRA_SESSION_ID) ?: return
+        val sessionId = runCatching { intent?.getStringExtra(RestTimer.EXTRA_SESSION_ID)?.let(::canonicalPublicId) }.getOrNull()
+        intent?.removeExtra(RestTimer.EXTRA_SESSION_ID)
+        if (sessionId == null) return
         sessionToOpen.value = sessionId
         // Consome o pedido: se o app for reaberto depois (ex.: pelos recentes), não volta
         // a abrir essa sessão, que pode já ter sido finalizada ou cancelada.
-        intent.removeExtra(RestTimer.EXTRA_SESSION_ID)
         setIntent(intent)
     }
 }

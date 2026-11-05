@@ -3,6 +3,7 @@ package br.com.ryuukossei.gymprogress.ui.settings
 import android.content.pm.PackageManager
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,8 +18,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
-import androidx.compose.foundation.layout.Row
-import androidx.compose.ui.Alignment
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -27,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -39,6 +39,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import br.com.ryuukossei.gymprogress.data.local.LocalCounts
 import br.com.ryuukossei.gymprogress.data.repository.GymRepository
 import br.com.ryuukossei.gymprogress.data.settings.SettingsState
+import br.com.ryuukossei.gymprogress.data.settings.SettingsStore
 import br.com.ryuukossei.gymprogress.data.sync.SyncManager
 import br.com.ryuukossei.gymprogress.data.sync.SyncScheduler
 import br.com.ryuukossei.gymprogress.data.sync.SyncStatus
@@ -46,6 +47,9 @@ import br.com.ryuukossei.gymprogress.data.sync.SyncStatusStore
 import br.com.ryuukossei.gymprogress.ui.common.SectionTitle
 import br.com.ryuukossei.gymprogress.ui.common.appContainer
 import br.com.ryuukossei.gymprogress.ui.common.formatDateTime
+import br.com.ryuukossei.gymprogress.ui.common.userMessage
+import br.com.ryuukossei.gymprogress.ui.theme.workoutWarningColor
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -62,12 +66,12 @@ data class SettingsActionState(
 
 class SettingsViewModel(
     private val repository: GymRepository,
-    settings: StateFlow<SettingsState>,
+    private val settingsStore: SettingsStore,
     private val sync: SyncManager,
     private val syncStatusStore: SyncStatusStore,
     private val scheduler: SyncScheduler,
 ) : ViewModel() {
-    val settings: StateFlow<SettingsState> = settings
+    val settings: StateFlow<SettingsState> = settingsStore.state
     val syncStatus: StateFlow<SyncStatus> = syncStatusStore.state
 
     val counts: StateFlow<LocalCounts?> =
@@ -77,22 +81,39 @@ class SettingsViewModel(
     val pending: StateFlow<Int> =
         repository.observe { repository.dao.observePendingChanges() }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
+    val sendable: StateFlow<Int?> =
+        repository.observe { repository.dao.observeSendableChanges() }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     private val _action = MutableStateFlow(SettingsActionState())
     val action: StateFlow<SettingsActionState> = _action.asStateFlow()
 
     fun reimport(discardLocalChanges: Boolean = false) {
+        if (_action.value.working) return
         _action.value = SettingsActionState(working = true)
         viewModelScope.launch {
             _action.value = try {
                 val r = repository.reimport(discardLocalChanges)
                 SettingsActionState(message = "Importados: ${r.workouts} treinos, ${r.exercises} exercícios, ${r.sessions} sessões e ${r.sets} séries.")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                SettingsActionState(message = e.message ?: "Erro desconhecido.", isError = true)
+                SettingsActionState(message = e.userMessage(), isError = true)
             }
         }
     }
 
-    fun disconnect() = repository.disconnect()
+    fun disconnect() {
+        if (_action.value.working) return
+        _action.value = SettingsActionState(working = true)
+        viewModelScope.launch {
+            try { repository.disconnect() }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { _action.value = SettingsActionState(message = "Não foi possível desconectar. Tente novamente.", isError = true) }
+            finally { _action.update { it.copy(working = false) } }
+        }
+    }
+
+    fun setDarkTheme(enabled: Boolean) = settingsStore.setDarkTheme(enabled)
 
     fun setAutoSync(enabled: Boolean) {
         syncStatusStore.setAutoSync(enabled)
@@ -106,22 +127,27 @@ class SettingsViewModel(
 
     /** Envia agora (independe do envio automático estar ligado). */
     fun syncNow() {
+        if (_action.value.working || syncStatus.value.running) return
         _action.value = SettingsActionState(working = true)
         viewModelScope.launch {
             _action.value = try {
                 val r = sync.pushPending()
                 SettingsActionState(
-                    message = if (r.sent == 0) "Nada pendente para enviar." else "Enviado ao servidor: ${r.sent} registro(s)." +
-                        if (r.warnings.isNotEmpty()) " Avisos: ${r.warnings.size}." else "",
+                    message = when {
+                        r.warnings.isNotEmpty() -> "O servidor devolveu ${r.warnings.size} aviso(s). O lote foi mantido pendente para não perder alterações."
+                        r.sent == 0 -> "Nenhuma alteração pronta para envio."
+                        else -> "Enviado ao servidor: ${r.sent} registro(s)."
+                    },
                     isError = r.warnings.isNotEmpty(),
                 )
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                SettingsActionState(message = e.message ?: "Erro ao sincronizar.", isError = true)
+                SettingsActionState(message = e.userMessage(), isError = true)
             }
         }
     }
 
-    fun dismissMessage() = _action.update { it.copy(message = null) }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -131,7 +157,7 @@ fun SettingsScreen() {
     val vm: SettingsViewModel = viewModel(
         factory = viewModelFactory {
             initializer {
-                SettingsViewModel(container.repository, container.settings.state, container.sync, container.syncStatus, container.syncScheduler)
+                SettingsViewModel(container.repository, container.settings, container.sync, container.syncStatus, container.syncScheduler)
             }
         }
     )
@@ -139,6 +165,7 @@ fun SettingsScreen() {
     val counts by vm.counts.collectAsStateWithLifecycle()
     val action by vm.action.collectAsStateWithLifecycle()
     val pending by vm.pending.collectAsStateWithLifecycle()
+    val sendable by vm.sendable.collectAsStateWithLifecycle()
     val syncStatus by vm.syncStatus.collectAsStateWithLifecycle()
     var confirmReimport by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
@@ -165,6 +192,28 @@ fun SettingsScreen() {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            SectionTitle("Aparência")
+            Card(Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text("Tema escuro", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            if (settings.isDarkTheme) "Ativado. Toque para usar o tema claro."
+                            else "Desativado. Toque para usar o tema escuro.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = settings.isDarkTheme, onCheckedChange = vm::setDarkTheme)
+                }
+            }
+
             SectionTitle("Servidor")
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -177,57 +226,67 @@ fun SettingsScreen() {
                 }
             }
 
-            SectionTitle("Dados neste celular")
+            SectionTitle("Dados e sincronização")
             Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("SALVO NESTE CELULAR", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.secondary)
+                    Text("Seus registros estão guardados", style = MaterialTheme.typography.titleMedium)
                     val c = counts
-                    if (c == null) {
-                        Text("Carregando…")
-                    } else {
-                        Text("${c.workouts} treinos • ${c.exercises} exercícios")
-                        Text("${c.sessions} sessões • ${c.sets} séries")
+                    if (c == null) Text("Carregando…") else {
+                        Text("${c.workouts} treinos · ${c.exercises} exercícios")
+                        Text("${c.sessions} sessões · ${c.sets} séries registradas")
                     }
-                    Text(
-                        if (pending == 0) "Nenhuma alteração pendente de envio."
-                        else "$pending alteração(ões) feitas neste celular ainda não enviadas ao servidor. Treinos em andamento são enviados quando finalizados.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (pending == 0) MaterialTheme.colorScheme.onSurfaceVariant else br.com.ryuukossei.gymprogress.ui.theme.WarningColor,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
                 }
             }
-
-            SectionTitle("Envio ao servidor")
             Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("ENVIO AO SERVIDOR", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.secondary)
+                    val ready = sendable
+                    val title = when {
+                        syncStatus.running -> "Enviando…"
+                        ready == null || counts == null -> "Carregando situação…"
+                        ready > 0 && syncStatus.lastError != null -> "Não foi possível enviar"
+                        ready > 0 -> "$ready alterações aguardando envio"
+                        syncStatus.lastWarnings.isNotEmpty() -> "Último envio concluído com avisos"
+                        pending > 0 -> "Treino em andamento salvo no celular"
+                        syncStatus.lastSuccessAt != null -> "✓ Tudo enviado"
+                        else -> "Nenhuma alteração pendente"
+                    }
+                    Text(title, style = MaterialTheme.typography.titleMedium,
+                        color = if (ready != null && ready > 0 && syncStatus.lastError != null) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurface)
+                    if (syncStatus.lastError != null) {
+                        Text("Última tentativa: ${syncStatus.lastError}", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error)
+                        Text("Seus dados continuam salvos no celular. Confira a conexão e o acesso ao servidor antes de tentar novamente.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text("Último envio concluído: " + (syncStatus.lastSuccessAt?.let(::formatDateTime) ?: "nenhum"),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (ready != null && pending > ready) {
+                        Text("${pending - ready} registros de treinos em andamento aguardam a finalização para serem enviados.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    syncStatus.lastWarnings.forEach {
+                        Text("Aviso do servidor: $it", style = MaterialTheme.typography.bodySmall,
+                            color = workoutWarningColor())
+                    }
+                    Button(onClick = vm::syncNow,
+                        enabled = !action.working && !syncStatus.running && ready != null && (ready > 0 || syncStatus.lastError != null),
+                        modifier = Modifier.fillMaxWidth()) {
+                        Text(if (syncStatus.running) "Enviando…" else if (syncStatus.lastError != null) "Tentar novamente" else "Enviar agora")
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("Enviar automaticamente", style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                "Treinos finalizados vão para o servidor assim que houver internet.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            Text(if (syncStatus.autoSyncEnabled) "Enviar alterações quando houver conexão."
+                                else "Você controla o envio pelo botão acima.", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(checked = syncStatus.autoSyncEnabled, onCheckedChange = vm::setAutoSync)
                     }
-                    Text(
-                        "Último envio: " + (syncStatus.lastSuccessAt?.let(::formatDateTime) ?: "nunca") +
-                            if (syncStatus.running) " (enviando…)" else "",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    syncStatus.lastError?.let {
-                        Text("Último erro: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                    }
-                    syncStatus.lastWarnings.forEach {
-                        Text("Aviso do servidor: $it", style = MaterialTheme.typography.bodySmall, color = br.com.ryuukossei.gymprogress.ui.theme.WarningColor)
-                    }
-                    OutlinedButton(
-                        onClick = vm::syncNow,
-                        enabled = !action.working && !syncStatus.running,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Sincronizar agora") }
+                    Text("Treinos em andamento só são enviados depois de finalizados.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
@@ -236,13 +295,13 @@ fun SettingsScreen() {
                 onClick = { confirmReimport = true },
                 enabled = !action.working,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text(if (action.working) "Importando…" else "Reimportar do servidor") }
+            ) { Text(if (action.working) "Aguarde…" else "Reimportar do servidor") }
 
             action.message?.let {
                 Text(
                     it,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (action.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    color = if (action.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary,
                 )
             }
 

@@ -1,11 +1,13 @@
 package br.com.ryuukossei.gymprogress.ui.session
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -26,7 +28,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import br.com.ryuukossei.gymprogress.timer.RestTimerState
-import br.com.ryuukossei.gymprogress.ui.theme.WarningColor
 import kotlinx.coroutines.delay
 
 /**
@@ -44,9 +45,10 @@ fun RestTimerBar(
     modifier: Modifier = Modifier,
 ) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    val running = timer != null && timer.endAt > now
+    val paused = timer?.pausedRemainingMillis
+    val running = timer != null && paused == null && timer.endAt > now
     LaunchedEffect(timer) {
-        while (timer != null) {
+        while (timer != null && timer.pausedRemainingMillis == null) {
             now = System.currentTimeMillis()
             if (now >= timer.endAt) break
             delay(250)
@@ -54,13 +56,13 @@ fun RestTimerBar(
         now = System.currentTimeMillis()
     }
 
-    val seconds = if (running) (((timer!!.endAt - now) + 999) / 1000).toInt() else baseSeconds
+    val seconds = if (paused != null) ((paused + 999) / 1000).toInt() else if (running) (((timer!!.endAt - now) + 999) / 1000).toInt() else baseSeconds
     val ending = running && seconds <= 5
 
     Card(
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = if (ending) WarningColor.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface,
+            containerColor = if (ending) MaterialTheme.colorScheme.secondary.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface,
         ),
     ) {
         Row(
@@ -68,7 +70,9 @@ fun RestTimerBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            TextButton(onClick = { onAdjust(-STEP) }, enabled = !running, modifier = Modifier.size(48.dp)) { Text("−5") }
+            TextButton(onClick = { onAdjust(-STEP) }, enabled = !running && paused == null,
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.secondary),
+                modifier = Modifier.size(48.dp)) { Text("−5") }
             Text(
                 "%d:%02d".format(seconds / 60, seconds % 60),
                 modifier = Modifier.weight(1f),
@@ -76,13 +80,17 @@ fun RestTimerBar(
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 fontSize = 26.sp,
-                color = if (ending) WarningColor else MaterialTheme.colorScheme.onSurface,
+                color = if (ending) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface,
             )
-            TextButton(onClick = { onAdjust(STEP) }, enabled = !running, modifier = Modifier.size(48.dp)) { Text("+5") }
+            TextButton(onClick = { onAdjust(STEP) }, enabled = !running && paused == null,
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.secondary),
+                modifier = Modifier.size(48.dp)) { Text("+5") }
             if (running) {
-                OutlinedButton(onClick = onStop) { Text("Parar") }
+                OutlinedButton(onClick = onStop,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.secondary),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary)) { Text("Parar") }
             } else {
-                Button(onClick = onStart) { Text("Iniciar") }
+                Button(onClick = onStart) { Text(if (paused != null) "Retomar" else "Iniciar") }
             }
         }
     }

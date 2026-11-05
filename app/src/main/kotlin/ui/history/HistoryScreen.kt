@@ -20,16 +20,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import br.com.ryuukossei.gymprogress.data.repository.GymRepository
 import br.com.ryuukossei.gymprogress.data.local.SessionSummaryRow
+import br.com.ryuukossei.gymprogress.data.repository.GymRepository
 import br.com.ryuukossei.gymprogress.ui.common.EmptyMessage
 import br.com.ryuukossei.gymprogress.ui.common.LoadingBox
 import br.com.ryuukossei.gymprogress.ui.common.SectionTitle
@@ -86,7 +86,7 @@ fun HistoryScreen(onOpenSession: (String) -> Unit) {
                                 Text(
                                     "Aguardando envio ao servidor",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = br.com.ryuukossei.gymprogress.ui.theme.WarningColor,
+                                    color = MaterialTheme.colorScheme.secondary,
                                 )
                             }
                         }

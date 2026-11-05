@@ -10,6 +10,7 @@ import br.com.ryuukossei.gymprogress.data.sync.SyncManager
 import br.com.ryuukossei.gymprogress.data.sync.SyncScheduler
 import br.com.ryuukossei.gymprogress.data.sync.SyncStatusStore
 import br.com.ryuukossei.gymprogress.timer.RestTimer
+import kotlinx.coroutines.sync.Mutex
 
 /** Monta as dependências do app uma única vez (injeção de dependências manual). */
 class AppContainer(context: Context) {
@@ -18,10 +19,11 @@ class AppContainer(context: Context) {
     private val api = GymApi()
     val syncStatus = SyncStatusStore(context)
     val syncScheduler = SyncScheduler(context)
-    val repository = GymRepository(database, api, settings) {
-        if (syncStatus.state.value.autoSyncEnabled) syncScheduler.syncSoon()
-    }
-    val sync = SyncManager(database, api, settings, syncStatus)
     val drafts = SessionDraftStore(context)
     val restTimer = RestTimer(context)
+    private val transferMutex = Mutex()
+    val repository = GymRepository(database, api, settings, transferMutex, onDataReplaced = { drafts.clearAll(); restTimer.stop() }) {
+        if (syncStatus.state.value.autoSyncEnabled) syncScheduler.syncSoon()
+    }
+    val sync = SyncManager(database, api, settings, syncStatus, transferMutex)
 }

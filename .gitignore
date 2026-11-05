@@ -18,3 +18,15 @@ local.properties
 keystore.properties
 *.jks
 *.keystore
+
+# Caches e saídas locais de compilação.
+/.kotlin/
+**/build/
+*.apk
+*.aab
+*.apks
+
+# Arquivos locais com credenciais; exemplos podem ser versionados.
+.env
+.env.*
+!.env.example

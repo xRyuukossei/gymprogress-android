@@ -19,8 +19,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** Estado do cronômetro: horário de término (epoch ms) e a sessão a que ele pertence. */
-data class RestTimerState(val endAt: Long, val totalSeconds: Int, val sessionId: String?)
+/** Horário de término e, quando pausado, tempo restante persistido em milissegundos. */
+data class RestTimerState(val endAt: Long, val totalSeconds: Int, val sessionId: String?, val pausedRemainingMillis: Long? = null)
 
 /**
  * Cronômetro de descanso que não depende da tela nem do app estar aberto:
@@ -43,7 +43,8 @@ class RestTimer(private val context: Context) {
     }
 
     fun start(seconds: Int, sessionId: String?) {
-        val total = seconds.coerceAtLeast(1)
+        val total = seconds.coerceIn(1, 3600)
+        notifications.cancel(NOTIFICATION_DONE)
         val endAt = System.currentTimeMillis() + total * 1000L
         val newState = RestTimerState(endAt, total, sessionId)
         save(newState)
@@ -51,24 +52,36 @@ class RestTimer(private val context: Context) {
         showRunningNotification(newState)
     }
 
+    /** Compatibilidade com um descanso pausado por uma versão anterior. */
+    fun resume() {
+        val current = _state.value ?: return
+        val remaining = current.pausedRemainingMillis ?: return
+        val resumed = current.copy(endAt = System.currentTimeMillis() + remaining, pausedRemainingMillis = null)
+        save(resumed)
+        scheduleAlarm(resumed.endAt, resumed.sessionId)
+        showRunningNotification(resumed)
+    }
+
     fun stop() {
         save(null)
         alarmManager.cancel(finishPendingIntent(null))
         notifications.cancel(NOTIFICATION_RUNNING)
+        notifications.cancel(NOTIFICATION_DONE)
     }
 
     /** Chamado pelo alarme no fim do descanso. */
     fun onFinished() {
-        val finished = _state.value
+        val finished = _state.value ?: return
+        if (finished.pausedRemainingMillis != null || finished.endAt > System.currentTimeMillis() + 250L) return
         save(null)
         notifications.cancel(NOTIFICATION_RUNNING)
-        showFinishedNotification(finished?.sessionId)
+        showFinishedNotification(finished.sessionId)
     }
 
     /** Se o app abrir depois do horário de término (ex.: alarme perdido), limpa o estado. */
     fun clearIfExpired() {
         val current = _state.value ?: return
-        if (current.endAt <= System.currentTimeMillis()) {
+        if (current.pausedRemainingMillis == null && current.endAt <= System.currentTimeMillis()) {
             save(null)
             notifications.cancel(NOTIFICATION_RUNNING)
         }
@@ -163,7 +176,8 @@ class RestTimer(private val context: Context) {
             .setContentIntent(openAppPendingIntent(state.sessionId))
             .addAction(0, "Parar", stopPendingIntent())
             .build()
-        notifications.notify(NOTIFICATION_RUNNING, notification)
+        try { notifications.notify(NOTIFICATION_RUNNING, notification) }
+        catch (_: SecurityException) { /* A permissão pode ser revogada após canNotify(). */ }
     }
 
     @SuppressLint("MissingPermission") // permissão verificada em canNotify()
@@ -179,7 +193,8 @@ class RestTimer(private val context: Context) {
             .setTimeoutAfter(60_000L)
             .setContentIntent(openAppPendingIntent(sessionId))
             .build()
-        notifications.notify(NOTIFICATION_DONE, notification)
+        try { notifications.notify(NOTIFICATION_DONE, notification) }
+        catch (_: SecurityException) { /* O cronômetro continua válido mesmo sem notificação. */ }
     }
 
     private fun canNotify(): Boolean = notifications.areNotificationsEnabled()
@@ -194,6 +209,7 @@ class RestTimer(private val context: Context) {
                 putLong(KEY_END_AT, state.endAt)
                 putInt(KEY_TOTAL, state.totalSeconds)
                 putString(KEY_SESSION, state.sessionId)
+                if (state.pausedRemainingMillis != null) putLong(KEY_PAUSED, state.pausedRemainingMillis) else remove(KEY_PAUSED)
             }
         }
         _state.value = state
@@ -201,8 +217,9 @@ class RestTimer(private val context: Context) {
 
     private fun loadState(): RestTimerState? {
         val endAt = prefs.getLong(KEY_END_AT, 0L)
-        if (endAt <= System.currentTimeMillis()) return null
-        return RestTimerState(endAt, prefs.getInt(KEY_TOTAL, 0), prefs.getString(KEY_SESSION, null))
+        val paused = if (prefs.contains(KEY_PAUSED)) prefs.getLong(KEY_PAUSED, 0L) else null
+        if (endAt == 0L) return null
+        return RestTimerState(endAt, prefs.getInt(KEY_TOTAL, 0), prefs.getString(KEY_SESSION, null), paused)
     }
 
     companion object {
@@ -214,6 +231,7 @@ class RestTimer(private val context: Context) {
         private const val REQUEST_FINISH = 2001
         private const val REQUEST_STOP = 2002
         private const val REQUEST_OPEN = 2003
+        private const val KEY_PAUSED = "paused_remaining_ms"
         private const val KEY_END_AT = "end_at"
         private const val KEY_TOTAL = "total_seconds"
         private const val KEY_SESSION = "session_id"

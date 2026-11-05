@@ -24,8 +24,8 @@ android {
         applicationId = "br.com.ryuukossei.gymprogress"
         minSdk = 26
         targetSdk = 37
-        versionCode = 8
-        versionName = "1.0.0"
+        versionCode = 14
+        versionName = "1.0.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -50,9 +50,11 @@ android {
         }
         release {
             if (!keystoreProps.isEmpty) signingConfig = signingConfigs.getByName("release")
+            // Otimização/encolhimento do R8 desligado: com ele a release fechava ao abrir
+            // (a debug, que não usa R8, funciona). Para um app pessoal e pequeno, o ganho
+            // de tamanho não compensa o risco.
             optimization {
-                enable = true
-                packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
+                enable = false
             }
         }
     }
@@ -76,7 +78,6 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
-    implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
@@ -92,10 +93,7 @@ dependencies {
     implementation(libs.androidx.work.runtime)
 
     testImplementation(libs.junit)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
-    androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
+    androidTestImplementation(libs.androidx.test.runner)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

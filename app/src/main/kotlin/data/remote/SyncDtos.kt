@@ -10,12 +10,12 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class SyncExportDto(
     val exportedAt: String,
-    val targetMuscles: List<SyncTargetMuscleDto> = emptyList(),
-    val exercises: List<SyncExerciseDto> = emptyList(),
-    val workouts: List<SyncWorkoutDto> = emptyList(),
-    val workoutExercises: List<SyncWorkoutExerciseDto> = emptyList(),
-    val sessions: List<SyncSessionDto> = emptyList(),
-    val sets: List<SyncSetDto> = emptyList(),
+    val targetMuscles: List<SyncTargetMuscleDto>,
+    val exercises: List<SyncExerciseDto>,
+    val workouts: List<SyncWorkoutDto>,
+    val workoutExercises: List<SyncWorkoutExerciseDto>,
+    val sessions: List<SyncSessionDto>,
+    val sets: List<SyncSetDto>,
 )
 
 @Serializable

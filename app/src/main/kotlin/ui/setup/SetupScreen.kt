@@ -35,6 +35,8 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import br.com.ryuukossei.gymprogress.data.repository.GymRepository
 import br.com.ryuukossei.gymprogress.ui.common.appContainer
+import br.com.ryuukossei.gymprogress.ui.common.userMessage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,6 +60,7 @@ class SetupViewModel(private val repository: GymRepository, initialUrl: String) 
     /** Valida o token baixando os dados. Em caso de sucesso, o app passa para as telas principais. */
     fun connect() {
         val current = _state.value
+        if (current.loading) return
         if (current.baseUrl.isBlank() || current.token.isBlank()) {
             _state.update { it.copy(error = "Informe o endereço da API e o token.") }
             return
@@ -66,8 +69,11 @@ class SetupViewModel(private val repository: GymRepository, initialUrl: String) 
         viewModelScope.launch {
             try {
                 repository.connectAndImport(current.baseUrl, current.token)
+                _state.update { it.copy(token = "", loading = false) }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                _state.update { it.copy(loading = false, error = e.message ?: "Erro desconhecido.") }
+                _state.update { it.copy(loading = false, error = e.userMessage()) }
             }
         }
     }
@@ -93,7 +99,7 @@ fun SetupScreen() {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Spacer(Modifier.height(24.dp))
-        Text("GymProgress", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary)
+        Text("GymProgress", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.secondary)
         Text(
             "Conecte o app ao seu servidor. Seus treinos e todo o histórico serão copiados para este celular.",
             style = MaterialTheme.typography.bodyMedium,

@@ -60,3 +60,25 @@ data class ExerciseUsageRow(
     val exercisePublicId: String,
     val workoutCount: Int,
 )
+
+/** Resumo do planejamento atual, sem contar exercícios removidos. */
+data class WorkoutOverviewRow(
+    val workoutPublicId: String,
+    val exerciseCount: Int,
+    val plannedSets: Int,
+)
+
+/** Snapshot determinístico para detectar mudanças locais durante uma transferência. */
+data class PendingChangesSnapshot(
+    val exercises: List<ExerciseEntity>,
+    val muscles: List<ExerciseTargetMuscleEntity>,
+    val workouts: List<WorkoutEntity>,
+    val workoutExercises: List<WorkoutExerciseEntity>,
+    val sessions: List<SessionEntity>,
+    val sets: List<SessionSetEntity>,
+    val setParents: List<SessionEntity>,
+    val deletions: List<PendingDeletionEntity>,
+) {
+    val isEmpty: Boolean get() = exercises.isEmpty() && workouts.isEmpty() && workoutExercises.isEmpty() &&
+        sessions.isEmpty() && sets.isEmpty() && deletions.isEmpty()
+}

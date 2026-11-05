@@ -15,12 +15,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -33,11 +33,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.graphics.Color
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -45,27 +45,27 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import br.com.ryuukossei.gymprogress.R
+import br.com.ryuukossei.gymprogress.data.draft.SessionDraftStore
 import br.com.ryuukossei.gymprogress.data.local.GymDao
 import br.com.ryuukossei.gymprogress.data.local.SessionSummaryRow
 import br.com.ryuukossei.gymprogress.data.local.WorkoutEntity
-import br.com.ryuukossei.gymprogress.data.draft.SessionDraftStore
 import br.com.ryuukossei.gymprogress.data.repository.GymRepository
 import br.com.ryuukossei.gymprogress.timer.RestTimer
 import br.com.ryuukossei.gymprogress.ui.common.EmptyMessage
 import br.com.ryuukossei.gymprogress.ui.common.LoadingBox
+import br.com.ryuukossei.gymprogress.ui.common.OperationErrorDialog
+import br.com.ryuukossei.gymprogress.ui.common.OperationRunner
 import br.com.ryuukossei.gymprogress.ui.common.SectionTitle
 import br.com.ryuukossei.gymprogress.ui.common.appContainer
 import br.com.ryuukossei.gymprogress.ui.common.formatDateTime
 import br.com.ryuukossei.gymprogress.ui.common.isCompletedSession
-import br.com.ryuukossei.gymprogress.ui.theme.SuccessColor
-import br.com.ryuukossei.gymprogress.ui.theme.WarningColor
+import br.com.ryuukossei.gymprogress.ui.theme.workoutWarningColor
+import java.text.Collator
+import java.util.Locale
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
-import java.text.Collator
-import java.util.Locale
 
 data class WorkoutItem(val workout: WorkoutEntity, val completedCount: Int)
 
@@ -110,25 +110,19 @@ class WorkoutsViewModel(
     /** Refaz a consulta (ex.: ao voltar para a aba). */
     fun refresh() = repository.notifyDataChanged()
 
-    /** Cria um treino e devolve o id (ou a mensagem de erro de validação). */
-    fun createWorkout(name: String, category: String, comment: String, onResult: (id: String?, error: String?) -> Unit) {
-        viewModelScope.launch {
-            try {
-                onResult(repository.saveWorkout(null, name, category, comment), null)
-            } catch (e: IllegalArgumentException) {
-                onResult(null, e.message ?: "Dados inválidos.")
-            }
+    val operations = OperationRunner(viewModelScope)
+
+    fun createWorkout(name: String, category: String, comment: String, onResult: (id: String?, error: String?) -> Unit) =
+        operations.run(onError = { onResult(null, it) }) {
+            onResult(repository.saveWorkout(null, name, category, comment), null)
         }
+
+    fun cancelSession(sessionId: String) = operations.run {
+        repository.cancelSession(sessionId)
+        drafts.clear(sessionId)
+        if (timer.state.value?.sessionId == sessionId) timer.stop()
     }
 
-    /** Descarta um treino em andamento (com as séries) e limpa o rascunho e o cronômetro dele. */
-    fun cancelSession(sessionId: String) {
-        viewModelScope.launch {
-            repository.cancelSession(sessionId)
-            drafts.clear(sessionId)
-            if (timer.state.value?.sessionId == sessionId) timer.stop()
-        }
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -142,6 +136,7 @@ fun WorkoutsScreen(
         factory = viewModelFactory { initializer { WorkoutsViewModel(container.repository, container.drafts, container.restTimer) } }
     )
     val state by vm.state.collectAsStateWithLifecycle()
+    OperationErrorDialog(vm.operations)
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
     // Arquivados começam sempre ocultos ao abrir a aba.
     var showArchived by remember { mutableStateOf(false) }
@@ -170,7 +165,7 @@ fun WorkoutsScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 if (s.inProgress.isNotEmpty()) {
-                    item { SectionTitle("Em andamento", color = WarningColor) }
+                    item { SectionTitle("Em andamento", color = MaterialTheme.colorScheme.secondary) }
                     items(s.inProgress, key = { "s-" + it.publicId }) { session ->
                         InProgressCard(
                             session = session,
@@ -242,14 +237,18 @@ fun WorkoutsScreen(
     confirmCancel?.let { session ->
         AlertDialog(
             onDismissRequest = { confirmCancel = null },
-            title = { Text("Cancelar treino?") },
-            text = { Text("O treino em andamento e todas as séries registradas nele serão descartados. Ele não ficará no histórico e isso não pode ser desfeito.") },
+            title = { Text("Cancelar treino?", color = workoutWarningColor()) },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Você vai descartar este treino em andamento.")
+                Text("${session.setCount} séries registradas serão descartadas.", fontWeight = FontWeight.SemiBold)
+                Text("Este treino não ficará no histórico. A exclusão não pode ser desfeita.")
+            } },
             confirmButton = {
                 TextButton(onClick = { confirmCancel = null; vm.cancelSession(session.publicId) }) {
-                    Text("Cancelar treino", color = MaterialTheme.colorScheme.error)
+                    Text("Cancelar treino", color = workoutWarningColor(), fontWeight = FontWeight.SemiBold)
                 }
             },
-            dismissButton = { TextButton(onClick = { confirmCancel = null }) { Text("Voltar") } },
+            dismissButton = { Button(onClick = { confirmCancel = null }) { Text("Continuar treinando") } },
         )
     }
 }
@@ -258,7 +257,7 @@ fun WorkoutsScreen(
 private fun InProgressCard(session: SessionSummaryRow, onContinue: () -> Unit, onCancel: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = WarningColor.copy(alpha = 0.10f)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Column {
@@ -271,12 +270,12 @@ private fun InProgressCard(session: SessionSummaryRow, onContinue: () -> Unit, o
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
-                    Text("Cancelar", color = MaterialTheme.colorScheme.error)
+                    Text("Cancelar", color = workoutWarningColor())
                 }
                 Button(
                     onClick = onContinue,
                     modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = WarningColor, contentColor = Color.Black),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary),
                 ) { Text("Continuar") }
             }
         }
@@ -302,7 +301,7 @@ private fun WorkoutCard(item: WorkoutItem, onClick: () -> Unit) {
             Text(
                 item.workout.category.uppercase(),
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.colorScheme.secondary,
             )
             item.workout.comment?.takeIf { it.isNotBlank() }?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -310,7 +309,7 @@ private fun WorkoutCard(item: WorkoutItem, onClick: () -> Unit) {
             Text(
                 "${item.completedCount} concluído${if (item.completedCount == 1) "" else "s"}",
                 style = MaterialTheme.typography.labelMedium,
-                color = SuccessColor,
+                color = MaterialTheme.colorScheme.tertiary,
             )
         }
     }

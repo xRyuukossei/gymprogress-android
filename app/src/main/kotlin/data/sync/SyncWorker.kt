@@ -15,6 +15,7 @@ import br.com.ryuukossei.gymprogress.GymProgressApp
 import br.com.ryuukossei.gymprogress.data.remote.ApiException
 import br.com.ryuukossei.gymprogress.data.repository.MissingTokenException
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 
 /** Executa o envio em segundo plano (roda mesmo com o app fechado, quando houver internet). */
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -24,6 +25,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         return try {
             container.sync.pushPending()
             Result.success()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: ApiException.Network) {
             Result.retry()
         } catch (e: ApiException.Http) {
@@ -33,6 +36,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             Result.failure()
         } catch (e: MissingTokenException) {
             Result.failure()
+        } catch (e: Exception) {
+            // Falhas locais inesperadas não devem ficar em repetição indefinida.
+            if (runAttemptCount < 3) Result.retry() else Result.failure()
         }
     }
 }

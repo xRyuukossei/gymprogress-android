@@ -3,6 +3,8 @@ package br.com.ryuukossei.gymprogress.ui.common
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -22,6 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -45,6 +49,9 @@ fun NumberStepper(
     step: Double,
     decimal: Boolean,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    showStepButtons: Boolean = true,
+    label: String? = null,
 ) {
     val format = { v: Double -> if (decimal) formatNumber(v) else v.toLong().toString() }
     var field by remember { mutableStateOf(TextFieldValue(format(value))) }
@@ -71,14 +78,16 @@ fun NumberStepper(
 
     Row(
         modifier = modifier
-            .background(MaterialTheme.colorScheme.background, RoundedCornerShape(10.dp)),
+            .background(MaterialTheme.colorScheme.background, RoundedCornerShape(10.dp))
+            .heightIn(min = 48.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = { change(-step) }, modifier = Modifier.size(40.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+        if (showStepButtons) TextButton(enabled = enabled, onClick = { change(-step) }, modifier = Modifier.size(40.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
             Text("−", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
             BasicTextField(
+                enabled = enabled,
                 value = field,
                 onValueChange = { newValue ->
                     if (keepSelection && newValue.text == field.text) {
@@ -86,24 +95,27 @@ fun NumberStepper(
                         return@BasicTextField
                     }
                     keepSelection = false
-                    val cleaned = newValue.text.filter { it.isDigit() || (decimal && (it == ',' || it == '.')) }
-                    field = newValue.copy(text = cleaned)
+                    val cleaned = newValue.text.filter { it.isDigit() || (decimal && (it == ',' || it == '.')) }.take(16)
+                    field = TextFieldValue(cleaned, selection = TextRange(newValue.selection.start.coerceAtMost(cleaned.length), newValue.selection.end.coerceAtMost(cleaned.length)))
                     parse(cleaned, decimal)?.let(onValueChange)
                 },
                 singleLine = true,
                 textStyle = TextStyle(
-                    color = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                    fontSize = 17.sp,
+                    color = if (focused) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface,
+                    fontSize = if (showStepButtons) 17.sp else 18.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
                 ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.secondary),
                 keyboardOptions = KeyboardOptions(
                     keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number,
                     imeAction = ImeAction.Done,
                 ),
                 keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                modifier = Modifier.onFocusChanged { state ->
+                decorationBox = { inner ->
+                    Box(Modifier.fillMaxWidth().heightIn(min = 48.dp), contentAlignment = Alignment.Center) { inner() }
+                },
+                modifier = Modifier.fillMaxWidth().semantics { if (label != null) contentDescription = label }.onFocusChanged { state ->
                     if (state.isFocused && !focused) {
                         field = field.copy(selection = TextRange(0, field.text.length))
                         keepSelection = true
@@ -116,7 +128,7 @@ fun NumberStepper(
                 },
             )
         }
-        TextButton(onClick = { change(step) }, modifier = Modifier.size(40.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+        if (showStepButtons) TextButton(enabled = enabled, onClick = { change(step) }, modifier = Modifier.size(40.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
             Text("+", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
