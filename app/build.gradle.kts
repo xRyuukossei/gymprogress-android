@@ -24,8 +24,8 @@ android {
         applicationId = "br.com.ryuukossei.gymprogress"
         minSdk = 26
         targetSdk = 37
-        versionCode = 14
-        versionName = "1.0.6"
+        versionCode = 15
+        versionName = "2.0.0-dev"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

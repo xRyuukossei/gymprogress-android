@@ -34,8 +34,9 @@ versão 1; não houve migration nem limpeza de dados para preparar este fechamen
 
 ## Desenvolvimento da v2
 
-A branch `codex/v2-development` começa no fechamento da v1 e pode avançar para `2.0.0`,
-com versionCode maior que 14. A `main` permanece em 1.0.6 até a v2 estar pronta.
+A branch `codex/v2-development` começa no fechamento da v1, identificada como
+`2.0.0-dev`, versionCode 15. Antes de publicar a v2, o versionCode deve ser maior que
+o da última versão de produção, inclusive se houver hotfixes posteriores da v1. A `main` permanece em 1.0.6 até a v2 estar pronta.
 Estatísticas, evolução e mudanças grandes ficam nessa branch. Novas alterações no esquema
 Room devem ter migrations explícitas e testes de atualização a partir de bancos v1.
 

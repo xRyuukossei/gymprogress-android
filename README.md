@@ -1,4 +1,4 @@
-# GymProgress Android — v1
+# GymProgress Android — v2 em desenvolvimento
 
 Aplicativo Kotlin com Jetpack Compose, Room e sincronização com a API GymProgress.
 O registro do treino funciona primeiro no celular. A sincronização envia alterações;
@@ -17,6 +17,8 @@ publicados em `gymprogress-android`; não modificam os outros dois repositórios
 
 A última versão da linha v1 é **1.0.6**, com **versionCode 14**. A tag correspondente é
 `v1.0.6`. O desenvolvimento da v2 parte desse fechamento em `codex/v2-development`.
+Esta branch começa em **2.0.0-dev**, versionCode **15**, sem mudanças funcionais adicionais.
+Use a variante debug para experimentar a v2 com dados separados da instalação de produção.
 
 ## Organização
 
